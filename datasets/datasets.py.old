@@ -1,0 +1,941 @@
+import numpy as np
+from math import ceil
+from PIL import Image
+import torch
+from torchvision.io import read_video
+from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.sampler import BatchSampler
+import torchio as tio
+import pandas as pd
+import os
+from collections.abc import Callable
+
+class SynthVolumeDataset(Dataset):
+    def __init__(self, x_list, y_list, transforms: Callable):
+
+        if transforms is not None:
+            self.transforms = transforms
+            
+        self.samples_path_list = x_list
+        self.labels_list = y_list.numpy()
+        self.label_to_indices = {label: np.where(self.labels_list == label)[0]
+                                 for label in sorted(set(self.labels_list))}
+
+    def __init__(self, x_list, y_list, preprocessed=False):
+        
+        self.preprocessed = preprocessed
+
+        self.samples_path_list = x_list
+        self.labels_list = y_list.numpy()
+        labels_set = sorted(set((self.labels_list)))
+        self.label_to_indices = {label: np.where(self.labels_list == label)[0]
+                                 for label in labels_set}
+
+    def get_class_id(self, label_vector):
+        for (k, v) in self.proximity_vector_labels_dict.items():
+            equals = label_vector == v
+            if hasattr(equals, 'all'):
+                if equals.all():
+                    return k
+            else:
+                if equals:
+                    return k
+        return None
+
+    def __len__(self):
+        return len(self.labels_list)
+    
+    def __getitem__(self, index, verbose=False):
+        item_vol = None
+        item_label = None
+        if not self.preprocessed and self.transforms is not None:
+            #item_vol, _, _ = read_video(str(self.samples_path_list[index]), output_format="TCHW")
+            with np.load(self.samples_path_list[index]) as data:
+                item_vol = data['volume']
+                item_label = self.labels_list[index]
+                with torch.no_grad():
+                    item_vol = self.transforms(item_vol)
+                return item_vol, item_label
+        else:
+            with np.load(self.samples_path_list[index]) as data:
+                item_vol = data['volume']
+                #item_vol = item_vol[:len(item_vol) // 2]
+                #item_label = data['labels']
+                item_label = self.labels_list[index]
+            return item_vol, item_label
+
+
+################################################################
+class OldSynthVolumeDataset(Dataset):
+    def __init__(self, volumes_path_list, vector_labels_dict, transforms: Callable):
+
+        if transforms is not None:
+            self.transforms = transforms
+
+        self.proximity_vector_labels_dict = vector_labels_dict
+            
+        self.samples_path_list = [[]]*len(volumes_path_list)
+        self.labels_list = [[]]*len(volumes_path_list)
+        for i, p in enumerate(volumes_path_list):
+            _, fname = os.path.split(p)
+            info = fname.split('.')[0:-1]
+            info = ''.join(info)
+            info = info.split('_')
+            fid = int(info[0])
+            cube = int(info[1])
+            sphere = int(info[2])
+            tetrahedron = int(info[3])
+            self.samples_path_list[ i ] = p
+            self.labels_list[ i ] = [cube, sphere, tetrahedron]
+        self.labels_as_classes = torch.LongTensor([self.get_class_id(l) for l in self.labels_list])
+        self.label_to_indices = {label: np.where(self.labels_as_classes.numpy() == label)[0]
+                                 for label in set(self.labels_as_classes)}
+
+    def __init__(self, volumes_path_list, vector_labels_dict, preprocessed: bool):
+
+        self.preprocessed = preprocessed
+        
+        self.proximity_vector_labels_dict = vector_labels_dict
+        
+        self.samples_path_list = [[]]*len(volumes_path_list)
+        self.labels_list = [[]]*len(volumes_path_list)
+        for i, p in enumerate(volumes_path_list):
+            _, fname = os.path.split(p)
+            info = fname.split('.')[0:-1]
+            info = ''.join(info)
+            info = info.split('_')
+            fid = int(info[0])
+            cube = int(info[1])
+            sphere = int(info[2])
+            tetrahedron = int(info[3])
+            self.samples_path_list[ fid - 1 ] = p
+            self.labels_list[ fid - 1 ] = [cube, sphere, tetrahedron]
+        self.labels_as_classes = torch.LongTensor([self.get_class_id(l) for l in self.labels_list])
+        self.label_to_indices = {label: np.where(self.labels_as_classes.numpy() == label)[0]
+                                 for label in set(self.labels_as_classes)}
+
+    def get_class_id(self, label_vector):
+        for (k, v) in self.proximity_vector_labels_dict.items():
+            equals = label_vector == v
+            if hasattr(equals, 'all'):
+                if equals.all():
+                    return k
+            else:
+                if equals:
+                    return k
+        return None
+
+    def __len__(self):
+        return len(self.labels_list)
+    
+    def __getitem__(self, index, verbose=False):
+        item_vol = None
+        item_label = None
+        if self.preprocessed is None and self.transforms is not None:
+            item_vol, _, _ = read_video(str(self.samples_path_list[index]), output_format="TCHW")
+            item_label = self.labels_list[index]
+            with torch.no_grad():
+                item_vol = self.transforms(item_vol)
+            return item_vol, torch.tensor(item_label)
+        else:
+            with np.load(self.samples_path_list[index]) as data:
+                item_vol = data['volume']
+                #item_label = data['labels']
+                item_label = self.labels_list[index]
+            return torch.tensor(item_vol), torch.tensor(item_label)
+
+###################################
+
+class SynthVolumeTripletDataset(Dataset):
+    def __init__(self, volumes_path_list, transforms, train=True):
+
+        if transforms is not None:
+            self.transforms = transforms
+            
+        self.samples_path_list = [None]*len(volumes_path_list)
+        self.labels_list = [None]*len(volumes_path_list)
+        for i, p in enumerate(volumes_path_list):
+            _, fname = os.path.split(p)
+            info = fname.split('.')[0:-1]
+            info = ''.join(info)
+            info = info.split('_')
+            fid = int(info[0])
+            cube = int(info[1])
+            sphere = int(info[2])
+            tetrahedron = int(info[3])
+            #self.samples_path_list[ fid - 1 ] = p
+            self.samples_path_list[ i ] = p
+            #self.labels_list[ fid - 1 ] = [cube, sphere, tetrahedron]
+            self.labels_list[ i ] = [sphere]
+
+        '''
+        self.proximity_vector_labels_dict = {
+            0: [0,0,0],
+            1: [1,0,0],
+            2: [0,1,0],
+            3: [0,0,1],
+            4: [1,0,1],
+            5: [1,1,0],
+            6: [0,1,1],
+            7: [1,1,1],
+        }
+        '''
+        self.proximity_vector_labels_dict = {
+            0: [0],
+            1: [1],
+        }
+        self.positive_pairs_dict, self.negative_pairs_dict = self._get_positive_negative_pairs_indices()
+
+        self.train = train
+
+        if not self.train:
+                triplets = [[i,
+                             np.random.choice(self.get_positives_indices(i)),
+                             np.random.choice(self.get_negatives_indices(i)),
+                             ]
+                            for i in range(len(volumes_path_list))]
+                self.test_triplets = triplets
+        #print(self.__getitem__(0, verbose=True)) # For testing purposes
+
+    def __len__(self):
+        return len(self.labels_list)
+    
+    def _get_positive_negative_pairs_indices(self):
+        positive_pairs_dict = dict((i, []) for i in range(8))
+        negative_pairs_dict = dict((i, []) for i in range(8))
+        for current_label_id, current_label_vector in self.proximity_vector_labels_dict.items():
+            for sample_index, sample_label in enumerate(self.labels_list):
+                is_positive_pair = current_label_vector == sample_label
+                if is_positive_pair:
+                    positive_pairs_dict[current_label_id].append(sample_index)
+                else:
+                    negative_pairs_dict[current_label_id].append(sample_index)
+        return positive_pairs_dict, negative_pairs_dict
+
+    def get_class_id(self, label_vector):
+        for (k, v) in self.proximity_vector_labels_dict.items():
+            #print('label_vector:', label_vector)
+            #print('v:', v)
+            #print('label_vector == v:', label_vector == v)
+            #equals = (label_vector == v).all()
+            equals = label_vector == v
+            if hasattr(equals, 'all'):
+                if equals.all():
+                    return k
+            else:
+                if equals:
+                    return k
+        return None
+
+    def get_positives_indices(self, anchor_idx):
+        #print('anchor_idx:', anchor_idx)
+        #print('self.get_labels(anchor_idx):', self.get_labels(anchor_idx))
+        return self.positive_pairs_dict[self.get_class_id(self.labels_list[anchor_idx])]
+
+    def get_negatives_indices(self, anchor_idx):
+        return self.negative_pairs_dict[self.get_class_id(self.labels_list[anchor_idx])]
+    
+    def __getitem__(self, index, verbose=False):
+        if self.train:
+            # item 1: anchor
+            anchor_vol, _, _ = read_video(str(self.samples_path_list[index]), output_format="TCHW")
+            anchor_label = self.labels_list[index]
+            anchor_class = self.get_class_id(anchor_label)
+            positives_list = self.positive_pairs_dict[anchor_class]
+            negatives_list = self.negative_pairs_dict[anchor_class]
+            if verbose:
+                print(f'\nItem of index {index} has labels {anchor_label}')
+                positives_labels = [self.labels_list[l] for l in positives_list]
+                print(f'Positive items\' indices are {positives_list} of labels {positives_labels}')
+                negatives_labels = [self.labels_list[l] for l in positives_list]
+                print(f'Negative items\' indices are {negatives_list} of labels {negatives_labels}')
+            positive_index = index
+            while positive_index == index:
+                positive_index = np.random.choice(positives_list)
+            negative_index = np.random.choice(negatives_list)
+            negative_labels = self.labels_list[negative_index]
+            
+            # item 2: positive sample
+            positive_vol, _, _ = read_video(str(self.samples_path_list[positive_index]), output_format="TCHW")
+    
+            # item 3: negative sample
+            negative_vol, _, _ = read_video(str(self.samples_path_list[negative_index]), output_format="TCHW")
+        else:
+            anchor_vol, _, _ = read_video(str(self.samples_path_list[self.test_triplets[index][0]]), output_format="TCHW")
+            positive_vol, _, _ = read_video(str(self.samples_path_list[self.test_triplets[index][1]]), output_format="TCHW")
+            negative_vol, _, _ = read_video(str(self.samples_path_list[self.test_triplets[index][2]]), output_format="TCHW")
+        
+        if self.transforms is not None:
+            with torch.no_grad():
+                anchor_vol = self.transforms(anchor_vol)
+                positive_vol = self.transforms(positive_vol)
+                negative_vol = self.transforms(negative_vol)
+        return (anchor_vol, positive_vol, negative_vol), []
+
+###################################
+
+class ProximityCTEmbeddingDataset(Dataset):
+    """
+    Train: For each sample (anchor) randomly chooses a positive and negative samples
+    Test: Creates fixed triplets for testing
+    """
+
+    def __init__(self, embeddings_path_list):     
+        self.embeddings = []
+        self.labels = []
+        self.names = []
+
+        for p in embeddings_path_list:
+            with np.load(p) as data:
+                self.embeddings.append(data['embedding'])
+                self.labels.append(data['label'])
+                self.names.append(data['name'])
+
+        self.embeddings = np.array(self.embeddings)
+        self.labels = np.array(self.labels)
+
+    def __getitem__(self, index):
+        return self.embeddings[index], self.labels[index]
+
+    def __len__(self):
+        return len(self.embeddings)
+
+class ProximityCTEmbeddingTripletDataset(Dataset):
+    """
+    Train: For each sample (anchor) randomly chooses a positive and negative samples
+    Test: Creates fixed triplets for testing
+    """
+
+    def __init__(self, embeddings_path_list, train=True):
+        self.train = train        
+        self.embeddings = []
+        self.labels = []
+        self.names = []
+
+        for p in embeddings_path_list:
+            with np.load(p) as data:
+                self.embeddings.append(data['embedding'])
+                self.labels.append(data['label'])
+                self.names.append(data['name'])
+
+        self.embeddings = np.array(self.embeddings)
+        self.labels = np.array(self.labels)
+
+        self.proximity_vector_labels_dict = {
+            0: [0,0,0], 
+            1: [1,0,0], 
+            2: [0,1,0], 
+            3: [0,0,1], 
+            4: [1,0,1], 
+            5: [1,1,0], 
+            6: [0,1,1], 
+            7: [1,1,1]
+        }
+        self.positive_pairs_dict, self.negative_pairs_dict = self._get_positive_negative_pairs_indices()
+
+        
+        if not self.train:
+            random_state = np.random.RandomState(0)
+
+            triplets = [[i,
+                         random_state.choice(self.get_positives_indices(i)),
+                         random_state.choice(self.get_negatives_indices(i)),
+                         ]
+                        for i in range(len(self))]
+            self.test_triplets = triplets
+        #print(self.__getitem__(0, verbose=True))
+
+    def __getitem__(self, index, verbose=False):
+        if self.train:
+            img1, label1 = self.embeddings[index], self.labels[index]
+            positive_index = index
+            class1 = self.get_class_id(label1)
+            positives_list = [i for i in self.positive_pairs_dict[class1] if i != index]
+            negatives_list = [i for i in self.negative_pairs_dict[class1] if i != index]
+            if len(positives_list) == 0 or len(negatives_list) == 0:
+                return
+            if verbose:
+                print(f'\nItem of index {index} has labels {label1}')
+                positives_labels = self.labels[positives_list]
+                print(f'Positive items\' indices are {positives_list} of labels {positives_labels}')
+                negatives_labels = self.labels[negatives_list]
+                print(f'Negative items\' indices are {negatives_list} of labels {negatives_labels}')
+            positive_index = np.random.choice(positives_list)
+            '''
+            while positive_index == index:
+                print('label for index:', label1)
+                print('positive_index:', positive_index)
+                print('index:', index)
+                print('positive_index == index:', positive_index == index)
+                print(positives_list)
+                new_positive_index = np.random.choice(positives_list)
+                if new_positive_index == positive_index:
+                    raise RuntimeError()
+                else:
+                    positive_index = new_positive_index
+            '''
+            negative_index = np.random.choice(negatives_list)
+            negative_labels = self.labels[negative_index]
+            
+            # item 2: positive sample
+            img2 = self.embeddings[positive_index]
+    
+            # item 3: negative sample
+            img3 = self.embeddings[negative_index]
+        else:
+            test_anchor_id, test_positive_id, test_negative_id = self.test_triplets[index]
+            img1 = self.embeddings[test_anchor_id]
+            img2 = self.embeddings[test_positive_id]
+            img3 = self.embeddings[test_negative_id]
+
+        return (img1, img2, img3), []
+        
+    def __len__(self):
+        return len(self.embeddings)
+
+    def _get_positive_negative_pairs_indices(self):
+        positive_pairs_dict = dict((i, []) for i in range(8))
+        negative_pairs_dict = dict((i, []) for i in range(8))
+        for current_label_id, current_label_vector in self.proximity_vector_labels_dict.items():
+            for sample_index, label in enumerate(self.labels):
+                is_positive_pair = current_label_vector == label
+                if is_positive_pair.all():
+                    positive_pairs_dict[current_label_id].append(sample_index)
+                else:
+                    negative_pairs_dict[current_label_id].append(sample_index)
+        return positive_pairs_dict, negative_pairs_dict
+
+    def get_positives_indices(self, anchor_idx):
+        #print('anchor_idx:', anchor_idx)
+        #print('self.get_labels(anchor_idx):', self.get_labels(anchor_idx))
+        return self.positive_pairs_dict[self.get_class_id(self.labels[anchor_idx])]
+
+    def get_negatives_indices(self, anchor_idx):
+        return self.negative_pairs_dict[self.get_class_id(self.labels[anchor_idx])]
+
+    def get_class_id(self, label_vector):
+        for (k, v) in self.proximity_vector_labels_dict.items():
+            equals = label_vector == v
+            if hasattr(equals, 'all'):
+                if equals.all():
+                    return k
+            else:
+                if equals:
+                    return k
+        return None
+    
+
+#-----------------------------------------------------------------
+class ProximityCTTripletDataset(tio.SubjectsDataset):
+    def __init__(self, ct_base_path, ct_image_ids, ct_labels_path, train=True):
+        
+        self.labels_df = pd.read_csv(
+            ct_labels_path, 
+            header=0, 
+            #index_col=0, 
+            dtype={'CT': str, 'condensacion': int, 'nodulos': int, 'quistes': int}
+        )
+
+        random_state = np.random.RandomState(0)
+        
+        # Mark those samples that have non-binary label values as not valid
+        self.labels_df['labels_are_valid'] = self.labels_df.apply(self._determine_valid_labels, axis=1)
+
+        s_list = []
+        for s_id in ct_image_ids:
+            label_attribs = self._get_ct_label_data(s_id)
+            s = tio.Subject(
+                t1 = tio.ScalarImage(os.path.join(ct_base_path, s_id)),
+                image_path = os.path.join(ct_base_path, s_id),
+                **label_attribs
+            )
+            s_list.append(s)
+
+        # Transforms and augmentations to apply to images in the dataset
+        s_transforms = tio.Compose([
+            tio.ToCanonical(),
+            tio.Resample(3),
+            tio.CropOrPad(target_shape=(130, 130, 84), padding_mode='minimum'),
+            tio.RescaleIntensity(out_min_max=(0, 1)),
+            tio.ZNormalization() # TODO: apply exact z-norm required by ResNet-18
+            
+        ])
+        '''
+        s_transforms = tio.Compose([
+            tio.ToCanonical(),
+            tio.Resample(1),
+            tio.CropOrPad(target_shape=(290, 290, 249), padding_mode='minimum'),
+            tio.RescaleIntensity(out_min_max=(0, 1)),
+            tio.ZNormalization() # TODO: apply exact z-norm required by ResNet-18
+            
+        ])
+        '''
+
+        # Filter out those samples with invalid labels
+        s_list = [s for s in s_list if s['labels_are_valid']]
+        
+        super().__init__(s_list, transform=s_transforms, load_getitem=False)
+
+        self.proximity_vector_labels_dict = {0: [0,0,0], 1: [1,0,0], 2: [0,1,0], 3: [0,0,1], 4: [1,0,1], 5: [1,1,0], 6: [0,1,1], 7: [1,1,1]}
+        self.positive_pairs_dict, self.negative_pairs_dict = self._get_positive_negative_pairs_indices()
+
+        self.train = train
+
+        if not self.train:
+            triplets = [[i,
+                         random_state.choice(self.get_positives_indices(i)),
+                         random_state.choice(self.get_negatives_indices(i)),
+                         ]
+                        for i in range(len(s_list))]
+            self.test_triplets = triplets
+        #print(self.__getitem__(0, verbose=True)) # For testing purposes
+    
+    def _determine_valid_labels(self, row):
+        if (row['condensacion'] == 1 or row['condensacion'] == 0) \
+        and (row['nodulos'] == 1 or row['nodulos'] == 0) \
+        and (row['quistes'] == 1 or row['quistes'] == 0):
+            return True
+        return False
+
+    def _get_ct_label_data(self, ct_code):
+        result = self.labels_df.loc[self.labels_df['CT'] == ct_code+'AN'].to_dict('records')
+        if result:
+            r = result[0]
+            r['labels_as_vector'] = self._get_label_vector(r)
+            return r
+        else:
+            return {'labels_are_valid': False}
+
+    def _get_label_vector(self, labels_dict):
+        c = labels_dict['condensacion']
+        n = labels_dict['nodulos']
+        q = labels_dict['quistes']
+        return [c, n, q]
+    
+    def _collate(self, sample):
+        data = sample['t1']['data'].squeeze(0).numpy()
+        labels = sample['labels_as_vector']
+        return data, labels
+
+    def get_labels(self, idx_list):
+        l = []
+        if not hasattr(idx_list, '__iter__'):
+            idx_list = [idx_list]
+        for s in self.dry_iter():
+            l.append(s['labels_as_vector'])
+        l = np.array(l)
+        return l[idx_list]
+
+    def _get_positive_negative_pairs_indices(self):
+        positive_pairs_dict = dict((i, []) for i in range(8))
+        negative_pairs_dict = dict((i, []) for i in range(8))
+        for current_label_id, current_label_vector in self.proximity_vector_labels_dict.items():
+            for sample_index, sample in enumerate(self.dry_iter()):
+                sample_label = sample['labels_as_vector']
+                #is_positive_pair = (current_label_vector == sample_label).all()
+                is_positive_pair = current_label_vector == sample_label
+                if is_positive_pair:
+                    positive_pairs_dict[current_label_id].append(sample_index)
+                else:
+                    negative_pairs_dict[current_label_id].append(sample_index)
+        return positive_pairs_dict, negative_pairs_dict
+
+    def get_class_id(self, label_vector):
+        for (k, v) in self.proximity_vector_labels_dict.items():
+            #print('label_vector:', label_vector)
+            #print('v:', v)
+            #print('label_vector == v:', label_vector == v)
+            #equals = (label_vector == v).all()
+            equals = label_vector == v
+            if hasattr(equals, 'all'):
+                if equals.all():
+                    return k
+            else:
+                if equals:
+                    return k
+        return None
+
+    def get_positives_indices(self, anchor_idx):
+        #print('anchor_idx:', anchor_idx)
+        #print('self.get_labels(anchor_idx):', self.get_labels(anchor_idx))
+        return self.positive_pairs_dict[self.get_class_id(self.get_labels(anchor_idx))]
+
+    def get_negatives_indices(self, anchor_idx):
+        return self.negative_pairs_dict[self.get_class_id(self.get_labels(anchor_idx))]
+    
+    def __getitem__(self, index, verbose=False):
+        if self.train:
+            # item 1: anchor
+            sample1 = super().__getitem__(index)
+            #sample1 = {'t1':sample1['t1'], 'labels_as_vector':sample1['labels_as_vector']}
+            img1, label1 = self._collate(sample1)
+            class1 = self.get_class_id(label1)
+            positives_list = self.positive_pairs_dict[class1]
+            negatives_list = self.negative_pairs_dict[class1]
+            if verbose:
+                print(f'\nItem of index {index} has labels {label1}')
+                positives_labels = self.get_labels(positives_list)
+                print(f'Positive items\' indices are {positives_list} of labels {positives_labels}')
+                negatives_labels = self.get_labels(negatives_list)
+                print(f'Negative items\' indices are {negatives_list} of labels {negatives_labels}')
+            positive_index = index
+            while positive_index == index:
+                positive_index = np.random.choice(positives_list)
+            negative_index = np.random.choice(negatives_list)
+            negative_labels = self.get_labels(negative_index)
+            
+            # item 2: positive sample
+            img2, _ = self._collate(super().__getitem__(positive_index))
+    
+            # item 3: negative sample
+            img3, _ = self._collate(super().__getitem__(negative_index))
+        else:
+            img1, _ = self._collate(super().__getitem__(self.test_triplets[index][0]))
+            img2, _ = self._collate(super().__getitem__(self.test_triplets[index][1]))
+            img3, _ = self._collate(super().__getitem__(self.test_triplets[index][2]))
+
+        #img1 = Image.fromarray(img1.numpy(), mode='L')
+        #img2 = Image.fromarray(img2.numpy(), mode='L')
+        #img3 = Image.fromarray(img3.numpy(), mode='L')
+        #if self.transform is not None:
+        #    img1 = self.transform(img1)
+        #    img2 = self.transform(img2)
+        #    img3 = self.transform(img3)
+        return (img1, img2, img3), []
+
+class SiameseMNIST(Dataset):
+    """
+    Train: For each sample creates randomly a positive or a negative pair
+    Test: Creates fixed pairs for testing
+    """
+
+    def __init__(self, mnist_dataset):
+        self.mnist_dataset = mnist_dataset
+
+        self.train = self.mnist_dataset.train
+        self.transform = self.mnist_dataset.transform
+
+        if self.train:
+            self.train_labels = self.mnist_dataset.train_labels
+            self.train_data = self.mnist_dataset.train_data
+            self.labels_set = set(self.train_labels.numpy())
+            self.label_to_indices = {label: np.where(self.train_labels.numpy() == label)[0]
+                                     for label in self.labels_set}
+        else:
+            # generate fixed pairs for testing
+            self.test_labels = self.mnist_dataset.test_labels
+            self.test_data = self.mnist_dataset.test_data
+            self.labels_set = set(self.test_labels.numpy())
+            self.label_to_indices = {label: np.where(self.test_labels.numpy() == label)[0]
+                                     for label in self.labels_set}
+
+            random_state = np.random.RandomState(29)
+
+            positive_pairs = [[i,
+                               random_state.choice(self.label_to_indices[self.test_labels[i].item()]),
+                               1]
+                              for i in range(0, len(self.test_data), 2)]
+
+            negative_pairs = [[i,
+                               random_state.choice(self.label_to_indices[
+                                                       np.random.choice(
+                                                           list(self.labels_set - set([self.test_labels[i].item()]))
+                                                       )
+                                                   ]),
+                               0]
+                              for i in range(1, len(self.test_data), 2)]
+            self.test_pairs = positive_pairs + negative_pairs
+
+    def __getitem__(self, index):
+        if self.train:
+            target = np.random.randint(0, 2)
+            img1, label1 = self.train_data[index], self.train_labels[index].item()
+            if target == 1:
+                siamese_index = index
+                while siamese_index == index:
+                    siamese_index = np.random.choice(self.label_to_indices[label1])
+            else:
+                siamese_label = np.random.choice(list(self.labels_set - set([label1])))
+                siamese_index = np.random.choice(self.label_to_indices[siamese_label])
+            img2 = self.train_data[siamese_index]
+        else:
+            img1 = self.test_data[self.test_pairs[index][0]]
+            img2 = self.test_data[self.test_pairs[index][1]]
+            target = self.test_pairs[index][2]
+
+        img1 = Image.fromarray(img1.numpy(), mode='L')
+        img2 = Image.fromarray(img2.numpy(), mode='L')
+        if self.transform is not None:
+            img1 = self.transform(img1)
+            img2 = self.transform(img2)
+        return (img1, img2), target
+
+    def __len__(self):
+        return len(self.mnist_dataset)
+
+
+class TripletMNIST(Dataset):
+    """
+    Train: For each sample (anchor) randomly chooses a positive and negative samples
+    Test: Creates fixed triplets for testing
+    """
+
+    def __init__(self, mnist_dataset):
+        self.mnist_dataset = mnist_dataset
+        self.train = self.mnist_dataset.train
+        self.transform = self.mnist_dataset.transform
+
+        if self.train:
+            self.train_labels = self.mnist_dataset.train_labels
+            self.train_data = self.mnist_dataset.train_data
+            self.labels_set = set(self.train_labels.numpy())
+            self.label_to_indices = {label: np.where(self.train_labels.numpy() == label)[0]
+                                     for label in self.labels_set}
+
+        else:
+            self.test_labels = self.mnist_dataset.test_labels
+            self.test_data = self.mnist_dataset.test_data
+            # generate fixed triplets for testing
+            self.labels_set = set(self.test_labels.numpy())
+            self.label_to_indices = {label: np.where(self.test_labels.numpy() == label)[0]
+                                     for label in self.labels_set}
+
+            random_state = np.random.RandomState(29)
+
+            triplets = [[i,
+                         random_state.choice(self.label_to_indices[self.test_labels[i].item()]),
+                         random_state.choice(self.label_to_indices[
+                                                 np.random.choice(
+                                                     list(self.labels_set - set([self.test_labels[i].item()]))
+                                                 )
+                                             ])
+                         ]
+                        for i in range(len(self.test_data))]
+            self.test_triplets = triplets
+
+    def __getitem__(self, index):
+        if self.train:
+            img1, label1 = self.train_data[index], self.train_labels[index].item()
+            positive_index = index
+            while positive_index == index:
+                positive_index = np.random.choice(self.label_to_indices[label1])
+            negative_label = np.random.choice(list(self.labels_set - set([label1])))
+            negative_index = np.random.choice(self.label_to_indices[negative_label])
+            img2 = self.train_data[positive_index]
+            img3 = self.train_data[negative_index]
+        else:
+            img1 = self.test_data[self.test_triplets[index][0]]
+            img2 = self.test_data[self.test_triplets[index][1]]
+            img3 = self.test_data[self.test_triplets[index][2]]
+
+        img1 = Image.fromarray(img1.numpy(), mode='L')
+        img2 = Image.fromarray(img2.numpy(), mode='L')
+        img3 = Image.fromarray(img3.numpy(), mode='L')
+        if self.transform is not None:
+            img1 = self.transform(img1)
+            img2 = self.transform(img2)
+            img3 = self.transform(img3)
+        return (img1, img2, img3), []
+
+    def __len__(self):
+        return len(self.mnist_dataset)
+
+
+class BalancedBatchSampler(BatchSampler):
+    """
+    Samples n_classes and within these classes samples n_samples.
+    Returns batches of size n_classes * n_samples
+    """
+
+    def __init__(self, labels, vector_labels_dict, n_classes, n_samples, multilabel=False):
+        self.rng = np.random.default_rng(seed=0)
+        self.vector_labels_dict = vector_labels_dict
+        self.labels = labels
+        self.labels_set = list(set(self.labels))
+        self.label_to_indices = {label: np.where(self.labels == label)[0]
+                                 for label in self.labels_set}
+        for l in self.labels_set:
+            np.random.shuffle(self.label_to_indices[l])
+        self.indices_to_labels = {idx: label for label in self.labels_set for idx in self.label_to_indices[label]}
+        self.used_label_indices_count = {label: 0 for label in self.labels_set}
+        self.count = 0
+        self.n_classes = n_classes
+        self.n_samples = n_samples
+        self.n_dataset = len(self.labels)
+        self.batch_size = self.n_samples * self.n_classes
+        self.multilabel = multilabel
+        if self.multilabel:
+            self.n_classes = 2 # multilabel compatible with 2-class sampling at the moment
+            self.compatible_labels = dict()
+            for current_label_id in self.labels_set:
+                current_label_vector = self.vector_labels_dict[current_label_id]
+                compatible_labels = []
+                for candidate_label_id, candidate_label_vector in self.vector_labels_dict.items():
+                    if current_label_id == candidate_label_id:
+                        continue
+                    same_class_detection = np.array([x and y for x, y in zip(current_label_vector, candidate_label_vector)])
+                    # same_class_detection: binary array. Value at index i determines whether current_label and candidate_label both indicate "positive" for the i-th class
+                    any_same_class_detection = same_class_detection.any()
+                    detect_only_different_classes = not any_same_class_detection
+                    if detect_only_different_classes:
+                        # if current_label_vector and candidate_label_vector correpsond to the detection of sets of mutually exclusive classes, then they are "negative-compatible"
+                        compatible_labels.append(candidate_label_id)
+                self.compatible_labels[current_label_id] = compatible_labels
+            #print('self.compatible_labels:', self.compatible_labels)
+            self.valid_label_pairs = []
+            for k, v in self.compatible_labels.items():
+                self.valid_label_pairs.extend([k, l] for l in v if l > k)
+            #print('self.labels_set:', self.labels_set)
+            #print('self.label_to_indices:', self.label_to_indices)
+            #print('self.valid_label_pairs:', self.valid_label_pairs)
+
+    def __len__(self):
+        #return self.n_dataset // self.batch_size
+        size = sum([min(len(self.label_to_indices[left_hand]), len(self.label_to_indices[right_hand]))//self.n_samples for left_hand, right_hand in self.valid_label_pairs])
+        #size = sum([max(len(self.label_to_indices[left_hand]), len(self.label_to_indices[right_hand]))//self.n_samples for left_hand, right_hand in self.valid_label_pairs])
+        return size
+     
+
+    def __iter__(self):
+        self.count = 0
+        self.used_label_indices_count = {label: 0 for label in self.labels_set}
+        for class_ in self.label_to_indices:
+            self.rng.shuffle(self.label_to_indices[class_])
+        self.rng.shuffle(self.valid_label_pairs)
+        #while self.count + self.batch_size < self.n_dataset:
+        for class_pair in self.valid_label_pairs:
+            # if pair_exhausted_left_hand and pair_exhausted_right_hand -> need to continue onto the next label pair
+            pair_exhausted_left_hand = False
+            pair_exhausted_right_hand = False
+            if self.multilabel:
+                #label_pair_index = self.rng.choice(len(self.valid_label_pairs), 1, replace=False)
+                #classes = self.rng.choice(self.valid_label_pairs)
+                classes = class_pair
+                classes = self.rng.choice(classes, len(classes), replace=False)
+            else:
+                classes = self.rng.choice(self.labels_set, self.n_classes, replace=False)
+            indices = []
+            while not pair_exhausted_left_hand and not pair_exhausted_right_hand: # samples pairs until all samples are yielded for any left and right-hand classes, undersampling on the most represented class if necessary
+            #while not pair_exhausted_left_hand or not pair_exhausted_right_hand: # samples pairs until all samples are yielded for both left and right-hand classes, oversampling on the least represented class if necessary 
+                class_left_hand, class_right_hand = classes
+                indices.extend(
+                    self.label_to_indices[class_left_hand][
+                        self.used_label_indices_count[class_left_hand]:
+                        self.used_label_indices_count[class_left_hand] + self.n_samples
+                    ]
+                )
+                indices.extend(
+                    self.label_to_indices[class_right_hand][
+                        self.used_label_indices_count[class_right_hand]:
+                        self.used_label_indices_count[class_right_hand] + self.n_samples
+                    ]
+                )
+                self.used_label_indices_count[class_left_hand] += self.n_samples
+                if self.used_label_indices_count[class_left_hand] + self.n_samples > len(self.label_to_indices[class_left_hand]):
+                    self.rng.shuffle(self.label_to_indices[class_left_hand])
+                    self.used_label_indices_count[class_left_hand] = 0
+                    pair_exhausted_left_hand = True
+                self.used_label_indices_count[class_right_hand] += self.n_samples
+                if self.used_label_indices_count[class_right_hand] + self.n_samples > len(self.label_to_indices[class_right_hand]):
+                    self.rng.shuffle(self.label_to_indices[class_right_hand])
+                    self.used_label_indices_count[class_right_hand] = 0
+                    pair_exhausted_right_hand = True
+                yield indices
+                self.count += len(indices)
+                indices = []
+
+    
+
+class TripletDataLoader(DataLoader):
+    def __init__(self, dataset, n_classes, n_samples, **kwargs):
+        self.rng = np.random.default_rng(0)
+        self.n_classes = n_classes
+        self.n_samples = n_samples
+        self.batch_size = self.n_classes * self.n_samples
+        self.triplets = []
+        self.label_to_indices = dataset.label_to_indices
+        self.labels_set = list(set(self.label_to_indices.keys()))
+        self.indices_to_labels = {idx: label for label in self.labels_set for idx in self.label_to_indices[label]}
+        self.length = -1
+        super().__init__(dataset=dataset, batch_size=self.batch_size, **kwargs)
+
+    def __len__(self):
+        if self.length < 0:
+            return ceil(len(self.dataset) / self.batch_size)
+        else:
+            return self.length
+
+    def generate_batches_from_triplets(self, triplets):
+        # TODO: sort triplets so consecutive triplets' negatives are of the same class
+        # hierarchical sort: first by the first elements' classes, then, by the third elements' classes
+        batches_list = []
+        self.triplets = triplets.cpu().numpy()
+        to_be_sampled_mask = np.array([True]*len(self.triplets))
+        #print('self.triplets:', self.triplets)
+        triplet_idx = 0
+        batch_labels_list = []
+        batch_buffer = []
+        while to_be_sampled_mask.any():
+            #to_be_iterated_triplets = self.triplets[to_be_sampled_mask]
+            pending_indices = np.where(to_be_sampled_mask)[0]
+            starting_triplet = self.triplets[pending_indices[0]]
+            starting_anchor, starting_positive, starting_negative = starting_triplet
+            #print('to_be_iterated_triplets:',to_be_iterated_triplets)
+            #print('starting_triplet:',starting_triplet)
+            # assuming valid labels: starting_anchor and starting_positive both correspond to the same label
+            # starting_anchor (as well as starting_positive) and starting_negative should belong to different labels
+            #anchor_positive_label = self.indices_to_labels[starting_anchor]
+            #negative_label = self.indices_to_labels[starting_negative]
+            same_anchor_mask = (self.triplets[:, 0] == starting_anchor)
+            same_positive_mask = (self.triplets[:, 1] == starting_positive)
+            same_anchor_positive_mask = same_anchor_mask & same_positive_mask
+            same_anchor_positive_to_be_sampled_mask = to_be_sampled_mask & same_anchor_positive_mask
+            #print('same anchor:',same_anchor_mask)
+            #print('same positive:',same_positive_mask)
+            #print('same anchor & positive:',same_anchor_positive_mask)
+            #same_anchor_negative_mask = (to_be_iterated_triplets[:, 0] == starting_anchor) & (to_be_iterated_triplets[:, 2] == starting_negative)
+            #batchable_triplets = same_anchor_positive_mask & same_anchor_negative_mask
+            #same_anchor_positive_triplets_indices = np.where(same_anchor_positive_mask)[0]
+            to_be_sampled_triplets_indices = np.where(same_anchor_positive_to_be_sampled_mask)[0]
+            # iterate all triplets with the same anchor-positive
+            starting_anchor, starting_positive, starting_negative = starting_triplet
+            #print(f'to be iterated for pair {[starting_anchor, starting_positive]}: {to_be_iterated_triplets[same_anchor_positive_triplets_indices]}')
+            #for next_triplet_idx in same_anchor_positive_triplets_indices:
+            for next_triplet_idx in to_be_sampled_triplets_indices:
+                to_be_sampled_mask[next_triplet_idx] = False
+                next_anchor, next_positive, next_negative = self.triplets[next_triplet_idx]
+                #next_anchor_positive_label = self.indices_to_labels[next_anchor]
+                #next_negative_label = self.indices_to_labels[next_negative]
+                new_batch_buffer = list(set(batch_buffer + [next_anchor, next_positive, next_negative]))
+                if len(new_batch_buffer) <= self.batch_size:
+                    batch_buffer = new_batch_buffer
+                else:
+                    batches_list.append(sorted(list(set(batch_buffer))))
+                    batch_buffer = [next_anchor, next_positive, next_negative]
+        #optimized_batches_list = self.optimize_batches(batches_list)
+        #self.length = len(optimized_batches_list)
+        #return optimized_batches_list
+        self.length = len(batches_list)
+        return batches_list
+    
+    def optimize_batches(self, batch_list):
+        optimized_batch_list = []
+        batch_buffer = []
+        for batch_indices in batch_list:
+            new_batch_buffer = list(set(batch_buffer + batch_indices))
+            if len(list(set(new_batch_buffer))) <= self.batch_size:
+                batch_buffer = new_batch_buffer
+            else:
+                optimized_batch_list.append(batch_buffer)
+                batch_buffer = batch_indices
+        return optimized_batch_list
+    
+
+    def load_from_batches(self, batch_list, sample_size=None):
+        self.rng.shuffle(batch_list)
+        for batch_indices in batch_list[:sample_size]:
+            batch = [self.dataset[i] for i in batch_indices]
+            batch_samples = torch.tensor(np.array([s for (s, _) in batch]))
+            batch_labels = torch.tensor([l for (_, l) in batch])
+            yield batch_samples, batch_labels
+            

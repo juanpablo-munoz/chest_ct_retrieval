@@ -1,0 +1,6 @@
+margin: 0.2
+loss: triplet
+distance: squared_euclidean
+batch_size: 8
+embedding_dim: 512
+epochs: 100

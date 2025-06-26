@@ -1,0 +1,18 @@
+# Ignore large data directory
+data/
+
+# Ignore checkpoints and large logs
+*.pth
+*.pt
+*.ckpt
+*.log
+
+# Ignore Python and VSCode artifacts
+__pycache__/
+*.py[cod]
+*.ipynb_checkpoints/
+.env
+.venv/
+.vscode/
+*.swp
+.DS_Store
