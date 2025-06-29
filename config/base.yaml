@@ -1,6 +1,27 @@
-margin: 0.2
-loss: triplet
-distance: squared_euclidean
-batch_size: 8
-embedding_dim: 512
-epochs: 100
+seed: 0
+dataset:
+  train_frac: 0.8
+model:
+  type: Proximity300x300
+  embedding_size: 128
+loss:
+  type: OnlineTripletLoss
+  margin: 0.2
+training:
+  n_epochs: 50
+  batch:
+    n_classes: 2
+    n_samples: 4
+  optimizer:
+    type: adam
+    lr: 1e-5
+    weight_decay: 1e-4
+  scheduler:
+    step_size: 50
+    gamma: 0.1
+paths:
+  runs: runs
+  DR2156_300_preprocessed: "data/DR2156/DR2156_300_preprocessed"
+  DR2156_300_resnet18_embeddings: "data/DR2156/DR2156_300_resnet18_embeddings"
+logging:
+  log_interval: 10
