@@ -1,12 +1,16 @@
 seed: 0
+
 dataset:
   train_frac: 0.8
+
 model:
   type: Proximity300x300
   embedding_size: 128
+
 loss:
   type: OnlineTripletLoss
   margin: 0.2
+
 training:
   n_epochs: 50
   batch:
@@ -27,9 +31,21 @@ training:
       args:
         label_dict: PROXIMITY_VECTOR_LABELS_FOR_TRAINING
         class_names: PROXIMITY_CLASS_NAMES
+
 paths:
-  runs: runs
-  DR2156_300_preprocessed: "data/DR2156/DR2156_300_preprocessed"
-  DR2156_300_resnet18_embeddings: "data/DR2156/DR2156_300_resnet18_embeddings"
+  user_home: /dataChivo/jpmunoz
+  base_data: /dataChivo/batch_01/bigdata_02/datareleases
+  project_root: ${paths.user_home}/chest_ct_retrieval
+
+  dr2156:
+    datarelease: ${paths.base_data}/DR2156
+    ct: ${paths.dr2156.datarelease}/DR2156_studies
+    labels: ${paths.dr2156.datarelease}/DR2156_labels/DR2156_labels.csv
+    preprocessed_300: ${paths.project_root}/data/DR2156/DR2156_300_preprocessed
+    preprocessed_512: ${paths.project_root}/data/DR2156/DR2156_512_preprocessed
+    embeddings_300: ${paths.project_root}/data/DR2156/DR2156_300_resnet18_embeddings
+    embeddings_512: ${paths.project_root}/data/DR2156/DR2156_512_resnet18_embeddings
+    triplet_runs: ${paths.project_root}/runs
+
 logging:
   log_interval: 10
