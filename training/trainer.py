@@ -4,7 +4,8 @@ import numpy as np
 from tqdm.auto import tqdm
 import os
 from datetime import datetime
-from utils import extract_embeddings, HardestNegativeTripletSelector, SemihardNegativeTripletSelector
+from utils.embedding import extract_embeddings
+from utils.selectors import HardestNegativeTripletSelector, SemihardNegativeTripletSelector
 from chest_ct_retrieval.losses.losses import OnlineTripletLoss
 
 class Trainer:

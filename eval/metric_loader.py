@@ -20,41 +20,6 @@ _METRIC_REGISTRY = {
     "AllMetrics": AllMetrics,
 }
 
-def initialize_metrics(metric_cfg_list):
-    """
-    Instantiate metric objects from config list.
-    
-    Args:
-        metric_cfg_list: list of dicts like
-            [{"name": "Loss"}, {"name": "AllMetrics", "args": {...}}]
-    Returns:
-        list of metric instances
-    """
-    metrics = []
-    for m in metric_cfg_list:
-        name = m["name"]
-        args = m.get("args", {})
-        # Inject known constants if referenced as strings
-        if "label_dict" in args and args["label_dict"] == "PROXIMITY_VECTOR_LABELS_FOR_TRAINING":
-            args["label_dict"] = PROXIMITY_VECTOR_LABELS_FOR_TRAINING
-        if "class_names" in args and args["class_names"] == "PROXIMITY_CLASS_NAMES":
-            args["class_names"] = PROXIMITY_CLASS_NAMES
-        if name not in _METRIC_REGISTRY:
-            raise ValueError(f"Unknown metric: {name}")
-        metric_cls = _METRIC_REGISTRY[name]
-        metrics.append(metric_cls(**args))
-    return metrics
-
-from eval.metrics import (
-    AverageNonzeroTripletsMetric,
-    TotalNonzeroTripletsMetric,
-    Loss,
-    NDCG,
-    Recall,
-    AllMetrics,
-)
-
-
 def load_metrics(cfg):
     metrics = []
 
