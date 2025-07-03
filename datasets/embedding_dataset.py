@@ -1,6 +1,6 @@
 import numpy as np
 from torch.utils.data import Dataset
-from datasets.base import LabelVectorHelper
+from chest_ct_retrieval.datasets.base import LabelVectorHelper
 
 class ProximityCTEmbeddingDataset(Dataset):
     def __init__(self, embeddings_path_list):
@@ -33,7 +33,7 @@ class ProximityCTEmbeddingTripletDataset(Dataset):
 
         for p in embeddings_path_list:
             with np.load(p) as data:
-                self.embeddings.append(data['embedding'])
+                self.embeddings.append(data['volume'])
                 self.labels.append(data['label'])
                 self.names.append(data['name'])
 

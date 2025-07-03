@@ -10,6 +10,6 @@ def configure_environment(cfg):
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
     # Add project root to PYTHONPATH
-    project_root = Path(cfg.paths.project_root).resolve()
+    project_root = Path(cfg["paths"]["project_root"]).resolve()
     if str(project_root) not in sys.path:
         sys.path.append(str(project_root))

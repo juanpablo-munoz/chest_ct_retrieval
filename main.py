@@ -1,5 +1,4 @@
-from datetime import datetime
-import os
+from training.environment import configure_environment
 import torch
 from config.config import load_config
 from eval.metric_loader import load_metrics
@@ -11,16 +10,18 @@ from utils.seed import set_seed
 
 
 
-cfg = load_config("configs/base.yaml")
+cfg = load_config("config/base.yaml")
 
 set_seed(cfg["training"]["seed"])
 
 cuda_available = torch.cuda.is_available()
 
-run_dirs = setup_training_run(cfg)
+run_dirs = setup_training_run(cfg["paths"]["dr2156"]["triplet_runs"])
 
 checkpoints_dir = run_dirs["checkpoints"]
 tensorboard_dir = run_dirs["logs"]
+
+configure_environment(cfg)
 
 train_set, test_set, neg_compatibles = load_dataset(cfg["volume_dir"], cfg["seed"], cfg["train_fraction"])
 
@@ -30,10 +31,10 @@ p_model, p_loss_fn, p_optimizer, p_scheduler = initialize_model(
     lr=cfg["learning_rate"],
     weight_decay=cfg["weight_decay"],
     negative_compatibles_dict=neg_compatibles,
-    print_interval=10,
-    cuda=cuda
+    print_interval=cfg["logging"]["log_interval"],
+    cuda=cuda_available
 )
-loaders = create_loaders(train_set, test_set, cfg["n_classes"], cfg["n_samples"], cuda)
+loaders = create_loaders(train_set, test_set, cfg["n_classes"], cfg["n_samples"], cuda_available)
 
 p_metrics = load_metrics(cfg)
 

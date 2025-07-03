@@ -2,8 +2,8 @@ import numpy as np
 import torchio as tio
 import pandas as pd
 import os
-from datasets.base import LabelVectorHelper
-from datasets.constants import PROXIMITY_VECTOR_LABELS
+from chest_ct_retrieval.datasets.base import LabelVectorHelper
+from chest_ct_retrieval.datasets.constants import PROXIMITY_VECTOR_LABELS
 
 
 class ProximityCTTripletDataset(tio.SubjectsDataset):

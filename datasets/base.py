@@ -1,6 +1,6 @@
 from typing import List, Dict, Optional
 import numpy as np
-from datasets.constants import PROXIMITY_VECTOR_LABELS
+from chest_ct_retrieval.datasets.constants import PROXIMITY_VECTOR_LABELS
 
 class LabelVectorHelper:
     proximity_vector_labels_dict: Dict[int, List[int]] = PROXIMITY_VECTOR_LABELS

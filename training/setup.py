@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 
-def setup_training_run(cfg):
+def setup_training_run(runs_path):
     """
     Creates timestamped run directory structure:
     - runs/run_<timestamp>/
@@ -13,7 +13,7 @@ def setup_training_run(cfg):
     """
     timestamp_str = datetime.now().strftime('%Y%m%d_%H%M')
     run_subdir = f"run_{timestamp_str}"
-    base_runs_path = cfg["paths"]["runs"]
+    base_runs_path = runs_path
     run_dir = os.path.join(base_runs_path, run_subdir)
     checkpoints_dir = os.path.join(run_dir, 'checkpoints')
     logs_dir = os.path.join(run_dir, 'logs')

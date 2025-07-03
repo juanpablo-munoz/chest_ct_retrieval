@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torcheval.metrics import BinaryPrecision, BinaryRecall, BinaryF1Score
 from sklearn.metrics import classification_report, ndcg_score, jaccard_score
-from utils import pdist, query_dataset_dist
+from chest_ct_retrieval.utils.utils import pdist, query_dataset_dist
 
 
 class Metric:
