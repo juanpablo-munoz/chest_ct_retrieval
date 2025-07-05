@@ -4,7 +4,7 @@ import torch
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
-from chest_ct_retrieval.datasets.ct_volume_dataset import ProximityCTTripletDataset
+from chest_ct_retrieval.datasets.ct_volume_dataset import ProximityCTTripletDataset, ProximityPrerocessedCTTripletDataset
 from chest_ct_retrieval.datasets.embedding_dataset import ProximityCTEmbeddingTripletDataset
 from chest_ct_retrieval.datasets.constants import PROXIMITY_VECTOR_LABELS_FOR_TRAINING
 from chest_ct_retrieval.datasets.samplers import BalancedBatchSampler
@@ -50,8 +50,8 @@ def load_dataset(volume_dir, seed, train_frac):
         paths, labels_tensor, train_size=train_frac, stratify=labels_tensor, random_state=seed
     )
 
-    train_set = ProximityCTEmbeddingTripletDataset(x_train, train=True)
-    test_set = ProximityCTEmbeddingTripletDataset(x_test, train=False)
+    train_set = ProximityPrerocessedCTTripletDataset(x_train, train=True)
+    test_set = ProximityPrerocessedCTTripletDataset(x_test, train=False)
     return train_set, test_set, determine_negative_compatibles(PROXIMITY_VECTOR_LABELS_FOR_TRAINING)
 
 def create_loaders(train_set, test_set, n_classes, n_samples, cuda):
