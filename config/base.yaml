@@ -26,6 +26,8 @@ training:
     - name: Loss
     - name: AverageNonzeroTripletsMetric
     - name: TotalNonzeroTripletsMetric
+    - name: ndcg
+    - name: racall
     - name: AllMetrics
       args:
         label_dict: PROXIMITY_VECTOR_LABELS_FOR_TRAINING

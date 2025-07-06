@@ -7,20 +7,23 @@ from chest_ct_retrieval.datasets.base import LabelVectorHelper
 from chest_ct_retrieval.datasets.constants import PROXIMITY_VECTOR_LABELS
 
 class ProximityPrerocessedCTTripletDataset(Dataset):
-    def __init__(self, embeddings_path_list, train=True):
+    def __init__(self, embeddings_path_list, labels_list, train=True):
         self.train = train
         self.paths = embeddings_path_list
-        self.labels = []
-        self.names = []
+        self.labels = labels_list
+        #self.names = []
+        self.label_vector_helper = LabelVectorHelper()
+        self.label_to_indices = {label: np.where(self.labels == label)[0]
+                                 for label in sorted(set(self.labels))}
 
-        for p in embeddings_path_list:
-            with np.load(p) as data:
-                self.labels.append(data['label'])
-                self.names.append(data['name'])
+        # for p in embeddings_path_list:
+        #     with np.load(p) as data:
+        #         self.labels.append(data['label'])
+        #         self.names.append(data['name'])
 
         
         self.labels = np.array(self.labels)
-        self.positive_pairs_dict, self.negative_pairs_dict = LabelVectorHelper.build_pair_indices(self.labels)
+        self.positive_pairs_dict, self.negative_pairs_dict = self.label_vector_helper.build_pair_indices(self.labels)
 
         if not self.train:
             rng = np.random.default_rng(seed=0)
@@ -33,7 +36,8 @@ class ProximityPrerocessedCTTripletDataset(Dataset):
         if self.train:
             anchor_path = self.paths[index]
             anchor_label = self.labels[index]
-            class_id = LabelVectorHelper.get_class_id(anchor_label)
+            #class_id = self.label_vector_helper.get_class_id(anchor_label)
+            class_id = anchor_label
             positives = [i for i in self.positive_pairs_dict[class_id] if i != index]
             negatives = self.negative_pairs_dict[class_id]
             pos_index = np.random.choice(positives)
@@ -52,10 +56,12 @@ class ProximityPrerocessedCTTripletDataset(Dataset):
         return len(self.paths)
 
     def get_positives(self, anchor_idx):
-        return self.positive_pairs_dict[LabelVectorHelper.get_class_id(self.labels[anchor_idx])]
+        #return self.positive_pairs_dict[self.label_vector_helper.get_class_id(self.labels[anchor_idx])]
+        return self.positive_pairs_dict[self.labels[anchor_idx]]
 
     def get_negatives(self, anchor_idx):
-        return self.negative_pairs_dict[LabelVectorHelper.get_class_id(self.labels[anchor_idx])]
+        #return self.negative_pairs_dict[self.label_vector_helper.get_class_id(self.labels[anchor_idx])]
+        return self.negative_pairs_dict[self.labels[anchor_idx]]
 
     def _load_volume(self, path):
             with np.load(path) as data:

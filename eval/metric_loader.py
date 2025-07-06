@@ -23,17 +23,17 @@ _METRIC_REGISTRY = {
 def load_metrics(cfg):
     metrics = []
 
-    if cfg["metrics"].get("average_nonzero_triplets", True):
+    if "average_nonzero_triplets" in cfg["training"]["metrics"]:
         metrics.append(AverageNonzeroTripletsMetric())
-    if cfg["metrics"].get("total_nonzero_triplets", True):
+    if "total_nonzero_triplets" in cfg["training"]["metrics"]:
         metrics.append(TotalNonzeroTripletsMetric())
-    if cfg["metrics"].get("loss", True):
+    if "loss" in cfg["training"]["metrics"]:
         metrics.append(Loss())
-    if cfg["metrics"].get("ndcg", False):
+    if "ndcg" in cfg["training"]["metrics"]:
         metrics.append(NDCG(PROXIMITY_VECTOR_LABELS_FOR_TRAINING, PROXIMITY_CLASS_NAMES))
-    if cfg["metrics"].get("recall", False):
+    if "recall" in cfg["training"]["metrics"]:
         metrics.append(Recall(PROXIMITY_VECTOR_LABELS_FOR_TRAINING, PROXIMITY_CLASS_NAMES))
-    if cfg["metrics"].get("all_metrics", True):
+    if "all_metrics" in cfg["training"]["metrics"]:
         metrics.append(AllMetrics(PROXIMITY_VECTOR_LABELS_FOR_TRAINING, PROXIMITY_CLASS_NAMES))
 
     return metrics

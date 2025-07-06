@@ -1,4 +1,3 @@
-import torch
 from torch import optim
 from torch.optim import lr_scheduler
 
@@ -13,7 +12,7 @@ def initialize_model(embedding_size, margin, lr, weight_decay, negative_compatib
 
     loss_fn = OnlineTripletLoss(
         margin=margin,
-        negative_selector=SemihardNegativeTripletSelector(margin),
+        triplet_selector=SemihardNegativeTripletSelector(margin),
         negative_compatibles_dict=negative_compatibles_dict,
         print_interval=print_interval,
     )
