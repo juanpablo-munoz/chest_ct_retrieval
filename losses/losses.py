@@ -131,7 +131,7 @@ class OnlineTripletLoss(nn.Module):
             print('OnlineTripletLoss.forward()')
             k = min(10, len(losses))
             if k < len(losses):
-                print(f'(Loss elements are of length {len(losses)} which is too long! Printing only the first {k} elements to of each element.)')
+                print(f'(Loss elements are of length {len(losses)} which is too long! Printing only the first {k} items of each element.)')
             print(f'label_triplets[:{k}]:\n', triplets[:k])
             #print(f'an_sims[:{k}]:\n', an_sims[:k])
             #print(f'ap_sims[:{k}]:\n', ap_sims[:k])

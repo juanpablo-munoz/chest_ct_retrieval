@@ -1,5 +1,6 @@
 import torch
 from torch.utils.tensorboard import SummaryWriter
+from torch.cuda.amp import GradScaler, autocast
 import numpy as np
 from tqdm.auto import tqdm
 import os
@@ -36,8 +37,9 @@ class Trainer:
         self.start_epoch = start_epoch
         self.current_epoch = start_epoch
         self.tensorboard_writer = SummaryWriter(self.tensorboard_logs_dir)
-        
         self.tensorboard_writer.add_hparams
+        self.use_amp = self.cuda
+        self.scaler = GradScaler(enabled=self.use_amp)
         #self.tensorboard_writer.add_graph(self.model)
         for epoch in range(0, self.start_epoch):
             scheduler.step()
@@ -162,28 +164,35 @@ class Trainer:
                     if target is not None:
                         target = target.cuda()
 
-                outputs = self.model(*data)
+                with autocast(enabled=self.use_amp):
+                    outputs = self.model(*data)
 
-                #if type(outputs) not in (tuple, list):
-                #    outputs = (outputs,)
+                    #if type(outputs) not in (tuple, list):
+                    #    outputs = (outputs,)
 
-                loss_inputs = outputs
-                #if target is not None:
-                    #target = (target,)
-                    #torch.cat((loss_inputs, target))
+                    loss_inputs = outputs
+                    #if target is not None:
+                        #target = (target,)
+                        #torch.cat((loss_inputs, target))
 
-                #print('train_epoch.loss_inputs', loss_inputs)
-                print(f'\n### BATCH {total_batches} TRAINING LOSS ###')
-                print(f'Batch labels: {target}')
-                loss_outputs = self.loss_fn(query_embeddings=loss_inputs, query_target=target, db_embeddings=loss_inputs, db_target=target)
-                #print('train_epoch.loss_outputs', loss_outputs)
-                if type(loss_outputs) in (tuple, list):
-                    loss, triplets = loss_outputs
-                else:
-                    loss = loss_outputs
-                    triplets = []
+                    #print('train_epoch.loss_inputs', loss_inputs)
+                    print(f'\n### BATCH {total_batches} TRAINING LOSS ###')
+                    print(f'Batch labels: {target}')
+                    loss_outputs = self.loss_fn(query_embeddings=loss_inputs, query_target=target, db_embeddings=loss_inputs, db_target=target)
+                    #print('train_epoch.loss_outputs', loss_outputs)
+                    if type(loss_outputs) in (tuple, list):
+                        loss, triplets = loss_outputs
+                    else:
+                        loss = loss_outputs
+                        triplets = []
                 loss /= n_train_batches
-                loss.backward()
+                
+                if self.use_amp:
+                    self.scaler.scale(loss).backward()
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    loss.backward()
                 n_triplets = len(triplets)
                 print('loss:', loss)
                 print('n_triplets:', round(n_triplets, 1))

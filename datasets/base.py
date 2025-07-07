@@ -6,6 +6,12 @@ class LabelVectorHelper:
     def __init__(self):
         self.proximity_vector_labels_dict: Dict[int, List[int]] = PROXIMITY_VECTOR_LABELS_FOR_TRAINING
     
+    def get_label_vector(self, class_id: int) -> List[int]:
+        if class_id in self.proximity_vector_labels_dict:
+            return self.proximity_vector_labels_dict[class_id]
+        else:
+            return None
+
     def get_class_id(self, label_vector: List[int]) -> Optional[int]:
         for k, v in self.proximity_vector_labels_dict.items():
             try:
