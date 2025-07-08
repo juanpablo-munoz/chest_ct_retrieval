@@ -36,7 +36,7 @@ class Proximity300x300(nn.Module):
         )
       
     def forward(self, x):
-        with autocast():
+        with autocast('cuda'):
             # input.shape = [batch_size, 300, 1, h, w]
             shape = list(x.size())
             batch_size = int(shape[0])

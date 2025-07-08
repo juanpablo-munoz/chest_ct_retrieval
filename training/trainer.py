@@ -165,7 +165,7 @@ class Trainer:
                     if target is not None:
                         target = target.cuda()
 
-                with autocast(enabled=self.use_amp):
+                with autocast('cuda', enabled=self.use_amp):
                     outputs = self.model(*data)
 
                     #if type(outputs) not in (tuple, list):
