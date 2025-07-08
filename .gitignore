@@ -1,6 +1,9 @@
 # Ignore large data directory
 data/
 
+# Ignore run logs dir
+runs/
+
 # Ignore checkpoints and large logs
 *.pth
 *.pt
