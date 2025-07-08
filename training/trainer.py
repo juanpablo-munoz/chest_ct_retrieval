@@ -135,7 +135,7 @@ class Trainer:
         epoch_n_triplets = []
         total_batches = 0
         activation_conditions = len(self.avg_nonzero_triplets) >= 5 and np.array(self.avg_nonzero_triplets[-5:]).mean() < 5.0
-        if self.train_full_loader_switch or activation_conditions:
+        if self.train_full_loader_switch or activation_conditions or True:
             self.train_full_loader_switch = True # from this epoch onward, train from triplets mined over the full training dataset
             self.model.eval()
             margin = self.loss_fn.margin
@@ -157,10 +157,11 @@ class Trainer:
             #for data, target in tqdm(train_loader):
                 total_batches += 1
                 target = target if len(target) > 0 else None
-                if not type(data) in (tuple, list):
-                    data = (data,)
+                #if not type(data) in (tuple, list):
+                #    data = (data,)
                 if self.cuda:
-                    data = tuple(d.cuda() for d in data)
+                    #data = tuple(d.cuda() for d in data)
+                    data = data.cuda()
                     if target is not None:
                         target = target.cuda()
 
@@ -189,8 +190,7 @@ class Trainer:
                 
                 if self.use_amp:
                     self.scaler.scale(loss).backward()
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
+                    
                 else:
                     loss.backward()
                 n_triplets = len(triplets)
@@ -202,7 +202,10 @@ class Trainer:
                 post_epoch_train_embeddings.append(outputs)
                 train_labels.append(target)
                 epoch_n_triplets.append(n_triplets)
-            self.optimizer.step()
+            #self.optimizer.step()
+            if self.use_amp:
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
             
             post_epoch_train_embeddings = torch.cat(post_epoch_train_embeddings, dim=0)
             train_labels = torch.cat(train_labels, dim=0)

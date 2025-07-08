@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
+from torch.cuda.amp import autocast
 
 
 class Proximity300x300(nn.Module):
@@ -35,20 +36,21 @@ class Proximity300x300(nn.Module):
         )
       
     def forward(self, x):
-        # input.shape = [batch_size, 300, 1, h, w]
-        shape = list(x.size())
-        batch_size = int(shape[0])
-        h, w = x.size()[-2:]
-        x = x.view(batch_size*100, 3, h, w) # x is 5D but Resnet expects a 4D input - so, let's squeeze the first dimension!
-        x = self.features(x)
-        #print('resnet output shape:', x.size())
-        x = x.view(batch_size,100,512,10,10) # Now, we bring back the first dimension for the 3DConvs!
-        x = self.reducingconvs(x)
-        #reducingconvs output shape: torch.Size([batch_size, 16, 18, 3, 3])
-        #print('reducingconvs output shape:', x.size())
-        x = x.view(batch_size, 16*18*3*3) # Flatten all except the first dimension
-        x = self.fc(x)
-        x = F.normalize(x, p=2, dim=1)
+        with autocast():
+            # input.shape = [batch_size, 300, 1, h, w]
+            shape = list(x.size())
+            batch_size = int(shape[0])
+            h, w = x.size()[-2:]
+            x = x.view(batch_size*100, 3, h, w) # x is 5D but Resnet expects a 4D input - so, let's squeeze the first dimension!
+            x = self.features(x)
+            #print('resnet output shape:', x.size())
+            x = x.view(batch_size,100,512,10,10) # Now, we bring back the first dimension for the 3DConvs!
+            x = self.reducingconvs(x)
+            #reducingconvs output shape: torch.Size([batch_size, 16, 18, 3, 3])
+            #print('reducingconvs output shape:', x.size())
+            x = x.view(batch_size, 16*18*3*3) # Flatten all except the first dimension
+            x = self.fc(x)
+            x = F.normalize(x, p=2, dim=1)
         return x
 
 

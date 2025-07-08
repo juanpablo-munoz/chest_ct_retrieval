@@ -36,6 +36,20 @@ class ProximityPrerocessedCTTripletDataset(Dataset):
         if self.train:
             anchor_path = self.paths[index]
             anchor_label = self.labels[index]
+            anchor_label_vector = self.label_vector_helper.get_label_vector(anchor_label)
+            #class_id = self.label_vector_helper.get_class_id(anchor_label)
+            class_id = anchor_label
+            anchor = self._load_volume(anchor_path)
+        else:
+            a, p, n = self.test_triplets[index]
+            anchor = self._load_volume(self.paths[a])
+        return anchor, anchor_label_vector
+    
+    def __getitem__2(self, index):
+        if self.train:
+            anchor_path = self.paths[index]
+            anchor_label = self.labels[index]
+            anchor_label_vector = self.label_vector_helper.get_label_vector(anchor_label)
             #class_id = self.label_vector_helper.get_class_id(anchor_label)
             class_id = anchor_label
             positives = [i for i in self.positive_pairs_dict[class_id] if i != index]
@@ -50,7 +64,7 @@ class ProximityPrerocessedCTTripletDataset(Dataset):
             anchor = self._load_volume(self.paths[a])
             pos = self._load_volume(self.paths[p])
             neg = self._load_volume(self.paths[n])
-        return (anchor, pos, neg), []
+        return (anchor, pos, neg), anchor_label_vector
 
     def __len__(self):
         return len(self.paths)
