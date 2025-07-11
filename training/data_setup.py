@@ -4,12 +4,22 @@ import torch
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
-from chest_ct_retrieval.datasets.base import LabelVectorHelper
-from chest_ct_retrieval.datasets.ct_volume_dataset import ProximityPrerocessedCTTripletDataset
-from chest_ct_retrieval.datasets.constants import PROXIMITY_VECTOR_LABELS_FOR_TRAINING
-from chest_ct_retrieval.datasets.samplers import BalancedBatchSampler
-from chest_ct_retrieval.datasets.loaders import TripletDataLoader
-from chest_ct_retrieval.utils.compatibility import determine_negative_compatibles
+from datasets.base import LabelVectorHelper
+from datasets.ct_volume_dataset import ProximityPrerocessedCTTripletDataset
+from datasets.constants import PROXIMITY_VECTOR_LABELS_FOR_TRAINING
+from datasets.samplers import BalancedBatchSampler
+from datasets.loaders import TripletDataLoader
+from utils.compatibility import determine_negative_compatibles
+
+def collate_transposed_target(batch):
+    samples = []
+    transposed_target = []
+    for sample, target in batch:
+        samples.append(sample)
+        transposed_target.append(target)
+    samples = np.array(samples)
+    #transposed_target = np.array(transposed_target).transpose().tolist()
+    return samples, transposed_target
 
 def get_class_id(label_vector):
     for k, v in PROXIMITY_VECTOR_LABELS_FOR_TRAINING.items():
@@ -49,10 +59,10 @@ def create_loaders(train_set, test_set, n_classes, n_samples, cuda):
     batch_size = n_classes * n_samples
 
     return {
-        "train_eval": DataLoader(train_set, batch_size=batch_size, shuffle=False, **kwargs),
-        "test_eval": DataLoader(test_set, batch_size=batch_size, shuffle=False, **kwargs),
-        "train_triplet": DataLoader(train_set, batch_sampler=sampler_train, **kwargs),
-        "test_triplet": DataLoader(test_set, batch_sampler=sampler_test, **kwargs),
+        "train_eval": DataLoader(train_set, collate_fn=collate_transposed_target, batch_size=batch_size, shuffle=False, **kwargs),
+        "test_eval": DataLoader(test_set, collate_fn=collate_transposed_target, batch_size=batch_size, shuffle=False, **kwargs),
+        "train_triplet": DataLoader(train_set, collate_fn=collate_transposed_target, batch_sampler=sampler_train, **kwargs),
+        "test_triplet": DataLoader(test_set, collate_fn=collate_transposed_target, batch_sampler=sampler_test, **kwargs),
         "all_triplet_train": TripletDataLoader(train_set, n_classes=n_classes, n_samples=n_samples, **kwargs),
         "all_triplet_test": TripletDataLoader(test_set, n_classes=n_classes, n_samples=n_samples, **kwargs),
     }

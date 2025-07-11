@@ -1,4 +1,4 @@
-from chest_ct_retrieval.eval.metrics import (
+from eval.metrics import (
     Loss,
     AverageNonzeroTripletsMetric,
     TotalNonzeroTripletsMetric,
@@ -6,7 +6,7 @@ from chest_ct_retrieval.eval.metrics import (
     Recall,
     AllMetrics,
 )
-from chest_ct_retrieval.datasets.constants import (
+from datasets.constants import (
     PROXIMITY_VECTOR_LABELS_FOR_TRAINING,
     PROXIMITY_CLASS_NAMES
 )

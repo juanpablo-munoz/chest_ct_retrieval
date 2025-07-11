@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
-from torch.cuda.amp import autocast
+from torch import autocast, float16
 
 
 class Proximity300x300(nn.Module):
@@ -36,12 +36,14 @@ class Proximity300x300(nn.Module):
         )
       
     def forward(self, x):
-        with autocast('cuda'):
+        with autocast(device_type='cuda', dtype=float16):
             # input.shape = [batch_size, 300, 1, h, w]
             shape = list(x.size())
+            #print("input.shape:", shape)
             batch_size = int(shape[0])
             h, w = x.size()[-2:]
             x = x.view(batch_size*100, 3, h, w) # x is 5D but Resnet expects a 4D input - so, let's squeeze the first dimension!
+            #print("squeezed input.shape:", list(x.size()))
             x = self.features(x)
             #print('resnet output shape:', x.size())
             x = x.view(batch_size,100,512,10,10) # Now, we bring back the first dimension for the 3DConvs!

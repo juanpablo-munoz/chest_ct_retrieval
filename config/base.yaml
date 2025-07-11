@@ -14,7 +14,7 @@ training:
   n_epochs: 50
   batch:
     n_classes: 2
-    n_samples: 4
+    n_samples: 24
   optimizer:
     type: adam
     lr: 1e-5
@@ -40,14 +40,14 @@ paths:
   project_root: /dataChivo/jpmunoz/chest_ct_retrieval
 
   dr2156:
-    datarelease: chest_ct_retrieval/DR2156
-    ct: chest_ct_retrieval/DR2156_studies
-    labels: chest_ct_retrieval/DR2156_labels/DR2156_labels.csv
-    preprocessed_300: chest_ct_retrieval/data/DR2156/DR2156_300_preprocessed
-    preprocessed_512: chest_ct_retrieval/data/DR2156/DR2156_512_preprocessed
-    embeddings_300: chest_ct_retrieval/data/DR2156/DR2156_300_resnet18_embeddings
-    embeddings_512: chest_ct_retrieval/data/DR2156/DR2156_512_resnet18_embeddings
-    triplet_runs: chest_ct_retrieval/runs
+    datarelease: DR2156
+    ct: DR2156_studies
+    labels: DR2156_labels/DR2156_labels.csv
+    preprocessed_300: data/DR2156/DR2156_300_preprocessed
+    preprocessed_512: data/DR2156/DR2156_512_preprocessed
+    embeddings_300: data/DR2156/DR2156_300_resnet18_embeddings
+    embeddings_512: data/DR2156/DR2156_512_resnet18_embeddings
+    triplet_runs: runs
 
 logging:
   log_interval: 10

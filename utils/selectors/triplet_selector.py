@@ -88,7 +88,7 @@ class FunctionNegativeTripletSelector(TripletSelector):
                 ap_dist = distance_matrix[a_idx, p_idx].item()
                 an_dists = distance_matrix[a_idx, db_neg_indices]
                 loss_vals = ap_dist - an_dists + self.margin
-                loss_vals = loss_vals.numpy()
+                loss_vals = loss_vals.cpu().numpy()
 
                 n_sel = self.negative_selection_fn(loss_vals)
                 if n_sel is not None:

@@ -5,9 +5,9 @@ import numpy as np
 from tqdm.auto import tqdm
 import os
 from datetime import datetime
-from chest_ct_retrieval.utils.embedding import extract_embeddings
-from chest_ct_retrieval.utils.selectors import HardestNegativeTripletSelector, SemihardNegativeTripletSelector
-from chest_ct_retrieval.losses.losses import OnlineTripletLoss
+from utils.embedding import extract_embeddings
+from utils.selectors import HardestNegativeTripletSelector, SemihardNegativeTripletSelector
+from losses.losses import OnlineTripletLoss
 
 class Trainer:
     def __init__(self, train_loader, val_loader, train_eval_loader, val_eval_loader, train_full_loader, val_full_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, train_full_loader_switch, metrics=[], start_epoch=0) -> None:
@@ -39,7 +39,7 @@ class Trainer:
         self.tensorboard_writer = SummaryWriter(self.tensorboard_logs_dir)
         self.tensorboard_writer.add_hparams
         self.use_amp = self.cuda
-        self.scaler = GradScaler(enabled=self.use_amp)
+        self.scaler = GradScaler('cuda', enabled=self.use_amp)
         #self.tensorboard_writer.add_graph(self.model)
         for epoch in range(0, self.start_epoch):
             scheduler.step()

@@ -3,8 +3,8 @@ import torchio as tio
 from torch.utils.data import Dataset
 import pandas as pd
 import os
-from chest_ct_retrieval.datasets.base import LabelVectorHelper
-from chest_ct_retrieval.datasets.constants import PROXIMITY_VECTOR_LABELS
+from datasets.base import LabelVectorHelper
+from datasets.constants import PROXIMITY_VECTOR_LABELS
 
 class ProximityPrerocessedCTTripletDataset(Dataset):
     def __init__(self, embeddings_path_list, labels_list, train=True):
