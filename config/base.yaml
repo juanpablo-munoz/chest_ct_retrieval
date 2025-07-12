@@ -14,7 +14,7 @@ training:
   n_epochs: 50
   batch:
     n_classes: 2
-    n_samples: 24
+    n_samples: 4
   optimizer:
     type: adam
     lr: 1e-5

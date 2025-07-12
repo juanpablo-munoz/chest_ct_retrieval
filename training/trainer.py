@@ -1,6 +1,6 @@
 import torch
 from torch.utils.tensorboard import SummaryWriter
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 import numpy as np
 from tqdm.auto import tqdm
 import os
