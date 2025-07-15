@@ -135,7 +135,7 @@ class Trainer:
         epoch_n_triplets = []
         total_batches = 0
         activation_conditions = len(self.avg_nonzero_triplets) >= 5 and np.array(self.avg_nonzero_triplets[-5:]).mean() < 5.0
-        if self.train_full_loader_switch or activation_conditions or True:
+        if self.train_full_loader_switch or activation_conditions:
             self.train_full_loader_switch = True # from this epoch onward, train from triplets mined over the full training dataset
             self.model.eval()
             margin = self.loss_fn.margin
