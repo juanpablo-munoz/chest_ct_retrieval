@@ -29,7 +29,10 @@ def random_hard_negative(loss_values):
     return np.random.choice(mask) if len(mask) else None
 def semihard_negative(loss_values, margin): 
     mask = np.where((loss_values < margin) & (loss_values > 0))[0]
-    return np.random.choice(mask) if len(mask) else None
+    if len(mask):
+        return np.random.choice(mask)
+    else:
+        return random_hard_negative(loss_values)
 
 class FunctionNegativeTripletSelector(TripletSelector):
     def __init__(self, margin, negative_selection_fn, cpu=True):
@@ -130,7 +133,7 @@ class FunctionNegativeTripletSelector(TripletSelector):
                 ap_dist = distance_matrix[a_idx, p_idx].item()
                 an_dists = distance_matrix[a_idx, db_neg_indices]
                 loss_vals = ap_dist - an_dists + self.margin
-                loss_vals = loss_vals.cpu().numpy()
+                loss_vals = loss_vals.cpu().detach().numpy()
                 
                 if print_log:
                     print(f'for anchor_positive=({a_idx}, {p_idx}) with distance={round(ap_dist, 4)}: loss_values={loss_vals}')
