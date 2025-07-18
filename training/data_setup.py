@@ -17,8 +17,9 @@ def collate_transposed_target(batch):
     for sample, target in batch:
         samples.append(sample)
         transposed_target.append(target)
-    samples = np.array(samples)
+    samples = torch.tensor(np.array(samples))
     #transposed_target = np.array(transposed_target).transpose().tolist()
+    transposed_target = torch.tensor(transposed_target)
     return samples, transposed_target
 
 def get_class_id(label_vector):
