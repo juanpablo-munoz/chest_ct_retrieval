@@ -10,7 +10,7 @@ from utils.selectors import HardestNegativeTripletSelector, SemihardNegativeTrip
 from losses.losses import OnlineTripletLoss
 
 class Trainer:
-    def __init__(self, train_loader, val_loader, train_eval_loader, val_eval_loader, train_full_loader, val_full_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, train_full_loader_switch, metrics=[], start_epoch=0) -> None:
+    def __init__(self, train_loader, val_loader, train_eval_loader, val_eval_loader, train_full_loader, val_full_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, train_full_loader_switch, metrics=[], start_epoch=0, accumulation_steps=1) -> None:
         self.last_train_loss = np.inf
         self.best_val_avg_nonzero_triplets = np.inf
         self.last_val_avg_nonzero_triplets = np.inf
@@ -36,6 +36,7 @@ class Trainer:
         self.metrics = metrics
         self.start_epoch = start_epoch
         self.current_epoch = start_epoch
+        self.accumulation_steps = accumulation_steps
         self.tensorboard_writer = SummaryWriter(self.tensorboard_logs_dir)
         self.tensorboard_writer.add_hparams
         self.use_amp = self.cuda
@@ -153,9 +154,11 @@ class Trainer:
 
             self.model.train()
             self.optimizer.zero_grad()
+            accumulation_counter = 0
             for data, target in self.train_full_loader.load_from_batches(train_batches, sample_size=n_train_batches):
             #for data, target in tqdm(train_loader):
                 total_batches += 1
+                accumulation_counter += 1
                 target = target if len(target) > 0 else None
                 #if not type(data) in (tuple, list):
                 #    data = (data,)
@@ -166,7 +169,7 @@ class Trainer:
                         target = target.cuda()
 
                 with autocast('cuda', enabled=self.use_amp):
-                    outputs = self.model(*data)
+                    outputs = self.model(data)
 
                     #if type(outputs) not in (tuple, list):
                     #    outputs = (outputs,)
@@ -186,13 +189,15 @@ class Trainer:
                     else:
                         loss = loss_outputs
                         triplets = []
-                loss /= n_train_batches
+                
+                # Scale loss by accumulation steps
+                loss = loss / self.accumulation_steps
                 
                 if self.use_amp:
                     self.scaler.scale(loss).backward()
-                    
                 else:
                     loss.backward()
+                
                 n_triplets = len(triplets)
                 print('loss:', loss)
                 print('n_triplets:', round(n_triplets, 1))
@@ -202,10 +207,15 @@ class Trainer:
                 post_epoch_train_embeddings.append(outputs)
                 train_labels.append(target)
                 epoch_n_triplets.append(n_triplets)
-            #self.optimizer.step()
-            if self.use_amp:
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+                
+                # Perform optimizer step only when accumulation_counter reaches accumulation_steps
+                if accumulation_counter % self.accumulation_steps == 0:
+                    if self.use_amp:
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        self.optimizer.step()
+                    self.optimizer.zero_grad()
             
             post_epoch_train_embeddings = torch.cat(post_epoch_train_embeddings, dim=0)
             train_labels = torch.cat(train_labels, dim=0)
@@ -228,13 +238,16 @@ class Trainer:
             return mean_train_loss, self.metrics
         else:
             self.model.train()
+            self.optimizer.zero_grad()
             #for data, target in self.train_loader:
             total_loss = 0.0
             resnet_total_loss_grad = 0.0
             reducingconvs_total_loss_grad = 0.0
             fc_total_loss_grad = 0.0
+            accumulation_counter = 0
             for data, target in tqdm(self.train_loader):
                 total_batches += 1
+                accumulation_counter += 1
                 target = target if len(target) > 0 else None
                 if not type(data) in (tuple, list):
                     data = (data,)
@@ -243,29 +256,36 @@ class Trainer:
                     if target is not None:
                         target = target.cuda()
 
-                self.optimizer.zero_grad()
-                outputs = self.model(*data)
+                with autocast('cuda', enabled=self.use_amp):
+                    outputs = self.model(*data)
 
-                #if type(outputs) not in (tuple, list):
-                #    outputs = (outputs,)
+                    #if type(outputs) not in (tuple, list):
+                    #    outputs = (outputs,)
 
-                loss_inputs = outputs
-                #if target is not None:
-                    #target = (target,)
-                    #torch.cat((loss_inputs, target))
+                    loss_inputs = outputs
+                    #if target is not None:
+                        #target = (target,)
+                        #torch.cat((loss_inputs, target))
 
-                #print('train_epoch.loss_inputs', loss_inputs)
-                print(f'\n### BATCH {total_batches} OF {len(self.train_loader)} TRAINING LOSS ###')
-                print(f'Batch labels: {target}')
-                loss_outputs = self.loss_fn(query_embeddings=loss_inputs, query_target=target, db_embeddings=loss_inputs, db_target=target)
-                #print('train_epoch.loss_outputs', loss_outputs)
-                if type(loss_outputs) in (tuple, list):
-                    loss, triplets = loss_outputs
+                    #print('train_epoch.loss_inputs', loss_inputs)
+                    print(f'\n### BATCH {total_batches} OF {len(self.train_loader)} TRAINING LOSS ###')
+                    print(f'Batch labels: {target}')
+                    loss_outputs = self.loss_fn(query_embeddings=loss_inputs, query_target=target, db_embeddings=loss_inputs, db_target=target)
+                    #print('train_epoch.loss_outputs', loss_outputs)
+                    if type(loss_outputs) in (tuple, list):
+                        loss, triplets = loss_outputs
+                    else:
+                        loss = loss_outputs
+                        triplets = []
+                
+                # Scale loss by accumulation steps
+                loss = loss / self.accumulation_steps
+                
+                if self.use_amp:
+                    self.scaler.scale(loss).backward()
                 else:
-                    loss = loss_outputs
-                    triplets = []
-                loss.backward()
-                self.optimizer.step()
+                    loss.backward()
+                
                 n_triplets = len(triplets)
                 print('loss:', loss)
                 print('n_triplets:', round(n_triplets, 1))
@@ -283,6 +303,15 @@ class Trainer:
                 post_epoch_train_embeddings.append(outputs)
                 train_labels.append(target)
                 epoch_n_triplets.append(n_triplets)
+
+                # Perform optimizer step only when accumulation_counter reaches accumulation_steps
+                if accumulation_counter % self.accumulation_steps == 0:
+                    if self.use_amp:
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        self.optimizer.step()
+                    self.optimizer.zero_grad()
 
                 # early epoch stop
                 #if total_batches >= 10:
