@@ -4,6 +4,66 @@ from torchvision import models
 from torch import autocast, float16
 
 
+class Proximity100x100(nn.Module):
+    def __init__(self, embedding_size: int):
+        super(Proximity100x100, self).__init__()
+        
+        resnet = models.resnet18(weights='DEFAULT')
+        self.features = nn.Sequential(*(list(resnet.children())[:-2]))
+
+        #conv input torch.Size([1,83,512,14,14])
+        self.reducingconvs = nn.Sequential(
+            nn.Conv3d(100, 64, kernel_size = (3,3,3), stride=(3,1,1), padding=0),
+            nn.ReLU(True),
+            
+            nn.Conv3d(64, 32, kernel_size = (3,3,3), stride=(3,1,1), padding=0),
+            nn.ReLU(True),
+            
+            nn.Conv3d(32, 16, kernel_size = (3,2,2), stride=(3,2,2), padding=0),
+            nn.ReLU(True)
+        )
+        
+        if embedding_size >= 1024:
+            self.fc = nn.Sequential(
+                nn.Linear(16*18*3*3, 1024, bias=False),
+                nn.ReLU(True),
+                nn.Dropout(0.5),
+
+                nn.Linear(1024, embedding_size, bias=False)
+            )
+
+        else:
+            self.fc = nn.Sequential(
+                nn.Linear(16*18*3*3, 1024, bias=False),
+                nn.ReLU(True),
+                nn.Dropout(0.5),
+                
+                nn.Linear(1024, 512, bias=False), 
+                nn.ReLU(True),
+                nn.Dropout(0.5),
+                
+                nn.Linear(512, embedding_size, bias=False)
+            )
+      
+    def forward(self, x):
+        # input.shape = [batch_size, 300, 1, h, w]
+        shape = list(x.size())
+        print("input.shape:", shape)
+        batch_size = int(shape[0])
+        h, w = x.size()[-2:]
+        x = x.view(batch_size*100, 3, h, w) # x is 5D but Resnet expects a 4D input - so, let's squeeze the first dimension!
+        print("squeezed input.shape:", list(x.size()))
+        x = self.features(x)
+        print('resnet output shape:', x.size())
+        x = x.view(batch_size,100,512,3,3) # Now, we bring back the first dimension for the 3DConvs!
+        x = self.reducingconvs(x)
+        #reducingconvs output shape: torch.Size([batch_size, 16, 18, 3, 3])
+        print('reducingconvs output shape:', x.size())
+        x = x.view(batch_size, 16*18*3*3) # Flatten all except the first dimension
+        x = self.fc(x)
+        x = F.normalize(x, p=2, dim=1)
+        return x
+
 class Proximity300x300(nn.Module):
     def __init__(self, embedding_size: int):
         super(Proximity300x300, self).__init__()
