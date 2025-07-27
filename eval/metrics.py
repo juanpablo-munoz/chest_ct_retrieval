@@ -1325,30 +1325,30 @@ class AllMetrics(Metric):
                 if precision_k_value not in precision_aggregated:
                     precision_aggregated[precision_k_value] = 0.0
                 precision_aggregated[precision_k_value] += precision_per_class[precision_class_name][precision_k_value] * (precision_class_query_count[precision_class_name]/total_queries)
-                precision_per_class[precision_class_name][precision_k_value] = round(precision_per_class[precision_class_name][precision_k_value], 4)
+                precision_per_class[precision_class_name][precision_k_value] = float(round(precision_per_class[precision_class_name][precision_k_value], 4))
                 
                 average_precision_per_class[average_precision_class_name][average_precision_k_value] /= average_precision_class_query_count[average_precision_class_name]
                 if average_precision_k_value not in average_precision_aggregated:
                     average_precision_aggregated[average_precision_k_value] = 0.0
                 average_precision_aggregated[average_precision_k_value] += average_precision_per_class[average_precision_class_name][average_precision_k_value] * (average_precision_class_query_count[average_precision_class_name]/total_queries)
-                average_precision_per_class[average_precision_class_name][average_precision_k_value] = round(average_precision_per_class[average_precision_class_name][average_precision_k_value], 4)
+                average_precision_per_class[average_precision_class_name][average_precision_k_value] = float(round(average_precision_per_class[average_precision_class_name][average_precision_k_value], 4))
                 
                 recall_per_class[recall_class_name][recall_k_value] /= recall_class_query_count[recall_class_name]
                 if recall_k_value not in recall_aggregated:
                     recall_aggregated[recall_k_value] = 0.0
                 recall_aggregated[recall_k_value] += recall_per_class[recall_class_name][recall_k_value] * (recall_class_query_count[recall_class_name]/total_queries)
-                recall_per_class[recall_class_name][recall_k_value] = round(recall_per_class[recall_class_name][recall_k_value], 4)
+                recall_per_class[recall_class_name][recall_k_value] = float(round(recall_per_class[recall_class_name][recall_k_value], 4))
 
                 ndcg_per_class[ndcg_class_name][ndcg_k_value] /= ndcg_class_query_count[ndcg_class_name]
                 if ndcg_k_value not in ndcg_aggregated:
                     ndcg_aggregated[ndcg_k_value] = 0.0
                 ndcg_aggregated[ndcg_k_value] += ndcg_per_class[ndcg_class_name][ndcg_k_value] * (ndcg_class_query_count[ndcg_class_name]/total_queries)
-                ndcg_per_class[ndcg_class_name][ndcg_k_value] = round(ndcg_per_class[ndcg_class_name][ndcg_k_value], 4)
+                ndcg_per_class[ndcg_class_name][ndcg_k_value] = float(round(ndcg_per_class[ndcg_class_name][ndcg_k_value], 4))
         
-        precision_aggregated = {k: round(v, 4) for k, v in precision_aggregated.items()}
-        average_precision_aggregated = {k: round(v, 4) for k, v in average_precision_aggregated.items()}
-        recall_aggregated = {k: round(v, 4) for k, v in recall_aggregated.items()}
-        ndcg_aggregated = {k: round(v, 4) for k, v in ndcg_aggregated.items()}
+        precision_aggregated = {k: float(round(v, 4)) for k, v in precision_aggregated.items()}
+        average_precision_aggregated = {k: float(round(v, 4)) for k, v in average_precision_aggregated.items()}
+        recall_aggregated = {k: float(round(v, 4)) for k, v in recall_aggregated.items()}
+        ndcg_aggregated = {k: float(round(v, 4)) for k, v in ndcg_aggregated.items()}
         
         self.precision_per_class = precision_per_class
         self.average_precision_per_class = average_precision_per_class

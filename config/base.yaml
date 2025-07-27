@@ -3,7 +3,7 @@ dataset:
 
 model:
   type: Proximity300x300
-  embedding_size: 128
+  embedding_size: 512
 
 loss:
   type: OnlineTripletLoss
@@ -12,9 +12,10 @@ loss:
 training:
   seed: 0
   n_epochs: 50
+  augmentations: True
   batch:
     n_classes: 2
-    n_samples: 4
+    n_samples: 8
   optimizer:
     type: adam
     lr: 1e-5
@@ -23,15 +24,12 @@ training:
     step_size: 50
     gamma: 0.1
   metrics:
-    - name: Loss
-    - name: AverageNonzeroTripletsMetric
-    - name: TotalNonzeroTripletsMetric
-    - name: ndcg
-    - name: racall
-    - name: AllMetrics
-      args:
-        label_dict: PROXIMITY_VECTOR_LABELS_FOR_TRAINING
-        class_names: PROXIMITY_CLASS_NAMES
+    loss: True
+    average_nonzero_triplets: True
+    total_nonzero_triplets: True
+    ndcg: False
+    recall: False
+    all_metrics: True
   train_full_loader_switch: False
 
 paths:
@@ -44,6 +42,8 @@ paths:
     ct: DR2156_studies
     labels: DR2156_labels/DR2156_labels.csv
     preprocessed_300: data/DR2156/DR2156_300_preprocessed
+    preprocessed_300_int8: data/DR2156/DR2156_300_preprocessed_int8
+    preprocessed_300_zarr: data/DR2156/DR2156_300_preprocessed_zarr
     preprocessed_512: data/DR2156/DR2156_512_preprocessed
     embeddings_300: data/DR2156/DR2156_300_resnet18_embeddings
     embeddings_512: data/DR2156/DR2156_512_resnet18_embeddings

@@ -4,6 +4,7 @@ from torch.amp import GradScaler, autocast
 import numpy as np
 from tqdm.auto import tqdm
 import os
+import json
 from datetime import datetime
 from utils.embedding import extract_embeddings
 from utils.selectors import HardestNegativeTripletSelector, SemihardNegativeTripletSelector
@@ -80,14 +81,21 @@ class Trainer:
             message += '\n\nEpoch: {}/{}. Validation set:\n\tAverage loss: {:.4f}'.format(self.current_epoch, self.n_epochs,
                                                                                     val_loss)
             for metric in metrics:
-                message += '\nValidation {}:\n{}'.format(metric.name(), metric.value())
+                dict_metric = None
+                if isinstance(metric, dict):
+                    dict_metric = json.dumps(metric.value(), indent=2)
+                    message = '\nValidation {}:\n'.format(metric.name())
+                else:
+                    message = '\nValidation {}: {}'.format(metric.name(), metric.value())
                 if metric.name() == "Average nonzero triplets":
                     self.last_val_avg_nonzero_triplets = metric.value()
                 elif "mAP@k" in metric.name():
                     k = 10
                     self.val_map_at_k.append(metric.value()['mean_average_precision'][k])
+                print(message)
+                if(dict_metric):
+                    print(dict_metric)
 
-            print(message)
 
             #if val_loss < best_val_loss or epoch+1 >= self.n_epochs:
             #if self.last_val_avg_nonzero_triplets < self.best_val_avg_nonzero_triplets:
@@ -315,7 +323,8 @@ class Trainer:
 
                 # early epoch stop
                 #if total_batches >= 10:
-                #    break
+                if total_batches >= np.inf:
+                    break
             
             post_epoch_train_embeddings = torch.cat(post_epoch_train_embeddings, dim=0)
             train_labels = torch.cat(train_labels, dim=0)

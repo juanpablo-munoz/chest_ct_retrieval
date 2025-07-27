@@ -6,11 +6,100 @@ import os
 from datasets.base import LabelVectorHelper
 from datasets.constants import PROXIMITY_VECTOR_LABELS
 
+import zarr
+import fsspec
+import torch
+import torchio as tio
+from torchvision.transforms import v2
+
+class ProximityZarrPreprocessedCTTripletDataset(Dataset):
+    def __init__(self, zarr_path_list, labels_list, train=True, augment=False):
+        self.train = train
+        self.augment = augment
+        self.paths = zarr_path_list
+        self.labels = np.array(labels_list)
+        self.label_vector_helper = LabelVectorHelper()
+        self.label_to_indices = {label: np.where(self.labels == label)[0] for label in sorted(set(self.labels))}
+        self.positive_pairs_dict, self.negative_pairs_dict = self.label_vector_helper.build_pair_indices(self.labels)
+
+        if not self.train:
+            rng = np.random.default_rng(seed=0)
+            self.test_triplets = [
+                [i, rng.choice(self.get_positives(i)), rng.choice(self.get_negatives(i))]
+                for i in range(len(self))
+            ]
+
+        # Define deterministic preprocessing
+        self.preprocess = tio.Compose([
+            tio.Resample(1),
+            #tio.RescaleIntensity(out_min_max=(-1, 1)),
+        ])
+        #self.normalize = v2.Normalize(mean=[0.449], std=[0.226])
+
+        # Optional augmentation
+        self.augmentations = tio.Compose([
+            tio.RandomAffine(scales=(0.9, 1.1), degrees=10),
+            tio.RandomNoise(mean=0, std=(0, 0.1)),
+        ]) if augment else None
+
+    def rand_flip(self, ctvol):
+        """Flip <ctvol> along a random axis with 50% probability"""
+        if np.random.randint(low=0,high=100) < 50:
+            chosen_axis = np.random.randint(low=0,high=3) #0, 1, and 2 are axis options
+            ctvol =  np.flip(ctvol, axis=chosen_axis)
+        return ctvol
+
+    def rand_rotate(self, ctvol):
+        """Rotate <ctvol> some random amount axially with 50% probability"""
+        if np.random.randint(low=0,high=100) < 50:
+            chosen_k = np.random.randint(low=0,high=4)
+            ctvol = np.rot90(ctvol, k=chosen_k, axes=(1,2))
+        return ctvol
+
+    def __len__(self):
+        return len(self.paths)
+
+    def get_positives(self, anchor_idx):
+        return self.positive_pairs_dict[self.labels[anchor_idx]]
+
+    def get_negatives(self, anchor_idx):
+        return self.negative_pairs_dict[self.labels[anchor_idx]]
+
+    def __getitem__(self, index):
+        if self.train:
+            anchor_path = self.paths[index]
+            anchor_label = self.labels[index]
+            anchor_label_vector = self.label_vector_helper.get_label_vector(anchor_label)
+            volume = self._load_volume(anchor_path)
+        else:
+            a, p, n = self.test_triplets[index]
+            volume = self._load_volume(self.paths[a])
+            anchor_label_vector = self.label_vector_helper.get_label_vector(self.labels[a])
+        return volume, anchor_label_vector
+
+    def _load_volume(self, path):
+        store = fsspec.get_mapper(f"zip://{path}", write=False)
+        z = zarr.open(store, mode="r")
+        vol = torch.tensor(z[:]).unsqueeze(0).float()  # [1, D, H, W]
+
+        subject = tio.Subject(t1=tio.ScalarImage(tensor=vol))
+        subject = self.preprocess(subject)
+        if self.augment and self.train:
+            subject = self.augmentations(subject)
+            vol = subject['t1']['data']  # Still [1, D, H, W]
+            subject['t1']['data'] = self.rand_rotate(self.rand_flip(vol))
+        vol = subject['t1']['data']  # Still [1, D, H, W]
+        #vol = self.normalize(vol)  # torchvision v2 transform
+        vol = vol - 0.449 # Subtract ImageNet mean as we are using pretrained ResNet18 weights in the Proximity300x300 network
+        return vol
+
+
 class ProximityPrerocessedCTTripletDataset(Dataset):
-    def __init__(self, embeddings_path_list, labels_list, train=True):
+    def __init__(self, embeddings_path_list, labels_list, train=True, augmentations=False):
         self.train = train
         self.paths = embeddings_path_list
         self.labels = labels_list
+        self.augmentations = augmentations
         #self.names = []
         self.label_vector_helper = LabelVectorHelper()
         self.label_to_indices = {label: np.where(self.labels == label)[0]
@@ -28,22 +117,48 @@ class ProximityPrerocessedCTTripletDataset(Dataset):
         if not self.train:
             rng = np.random.default_rng(seed=0)
             self.test_triplets = [
-                [i, rng.choice(self.get_positives(i)), rng.choice(self.get_negatives(i))]
+                [i, int(rng.choice(self.get_positives(i))), int(rng.choice(self.get_negatives(i)))]
                 for i in range(len(self))
             ]
+
+        # Define deterministic preprocessing
+        self.preprocess = tio.Compose([
+            tio.RescaleIntensity(out_min_max=(0, 1)),
+        ])
+
+        # Optional augmentation
+        self.tio_transforms = tio.Compose([
+            tio.RandomAffine(scales=(0.9, 1.1), degrees=10),
+            tio.RandomNoise(mean=0, std=(0, 0.1)),
+        ])
+
+    def rand_flip(self, ctvol):
+        """Flip <ctvol> along a random axis with 50% probability"""
+        if np.random.randint(low=0,high=100) < 50:
+            chosen_axis = np.random.randint(low=0,high=3) #0, 1, and 2 are axis options
+            ctvol =  np.flip(ctvol, axis=chosen_axis)
+        return ctvol
+
+    def rand_rotate(self, ctvol):
+        """Rotate <ctvol> some random amount axially with 50% probability"""
+        if np.random.randint(low=0,high=100) < 50:
+            chosen_k = np.random.randint(low=0,high=4)
+            ctvol = np.rot90(ctvol, k=chosen_k, axes=(1,2))
+        return ctvol
 
     def __getitem__(self, index):
         if self.train:
             anchor_path = self.paths[index]
             anchor_label = self.labels[index]
-            anchor_label_vector = self.label_vector_helper.get_label_vector(anchor_label)
+            #anchor_label_vector = self.label_vector_helper.get_label_vector(anchor_label)
             #class_id = self.label_vector_helper.get_class_id(anchor_label)
-            class_id = anchor_label
-            anchor = self._load_volume(anchor_path)
         else:
-            a, p, n = self.test_triplets[index]
-            anchor = self._load_volume(self.paths[a])
-        return anchor, anchor_label_vector
+            a_idx, p_idx, n_idx = self.test_triplets[index]
+            anchor_path = self.paths[a_idx]
+            anchor_label = self.labels[a_idx]
+        anchor = self._load_volume(anchor_path)
+        #return anchor, anchor_label_vector
+        return anchor, anchor_label
     
     def __getitem__2(self, index):
         if self.train:
@@ -79,7 +194,14 @@ class ProximityPrerocessedCTTripletDataset(Dataset):
 
     def _load_volume(self, path):
             with np.load(path) as data:
-                return data['volume']
+                tio_image = tio.ScalarImage(tensor=data['volume'], affine=np.eye(4))
+                tio_image = self.preprocess(tio_image)
+                vol = tio_image["data"].squeeze(0).numpy()
+                if self.augmentations and self.train:
+                    tio_image = self.tio_transforms(tio_image)
+                    vol = self.rand_rotate(self.rand_flip(tio_image["data"].squeeze(0).numpy()))
+                vol -= 0.449 # Subtract ImageNet mean as we are using pretrained ResNet18 weights in the Proximity300x300 network
+                return vol[np.newaxis] # shape [1, D, H, W]
             
 
 class ProximityCTTripletDataset(tio.SubjectsDataset):

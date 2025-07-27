@@ -23,17 +23,17 @@ _METRIC_REGISTRY = {
 def load_metrics(cfg):
     metrics = []
 
-    if "average_nonzero_triplets" in cfg["training"]["metrics"]:
+    if "average_nonzero_triplets" in cfg["training"]["metrics"] and cfg["training"]["metrics"]["average_nonzero_triplets"]:
         metrics.append(AverageNonzeroTripletsMetric())
-    if "total_nonzero_triplets" in cfg["training"]["metrics"]:
+    if "total_nonzero_triplets" in cfg["training"]["metrics"] and cfg["training"]["metrics"]["total_nonzero_triplets"]:
         metrics.append(TotalNonzeroTripletsMetric())
-    if "loss" in cfg["training"]["metrics"]:
+    if "loss" in cfg["training"]["metrics"] and cfg["training"]["metrics"]["loss"]:
         metrics.append(Loss())
-    if "ndcg" in cfg["training"]["metrics"]:
+    if "ndcg" in cfg["training"]["metrics"] and cfg["training"]["metrics"]["ndcg"]:
         metrics.append(NDCG(PROXIMITY_VECTOR_LABELS_FOR_TRAINING, PROXIMITY_CLASS_NAMES))
-    if "recall" in cfg["training"]["metrics"]:
+    if "recall" in cfg["training"]["metrics"] and cfg["training"]["metrics"]["recall"]:
         metrics.append(Recall(PROXIMITY_VECTOR_LABELS_FOR_TRAINING, PROXIMITY_CLASS_NAMES))
-    if "all_metrics" in cfg["training"]["metrics"]:
+    if "all_metrics" in cfg["training"]["metrics"] and cfg["training"]["metrics"]["all_metrics"]:
         metrics.append(AllMetrics(PROXIMITY_VECTOR_LABELS_FOR_TRAINING, PROXIMITY_CLASS_NAMES))
 
     return metrics

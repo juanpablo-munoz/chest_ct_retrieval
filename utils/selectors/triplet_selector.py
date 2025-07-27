@@ -93,9 +93,7 @@ class FunctionNegativeTripletSelector(TripletSelector):
             db_neg_indices = np.where(db_neg_mask)[0]
 
             # All anchor-positive pairs
-            anchor_positives = np.array(
-                np.meshgrid(q_indices, db_pos_indices)
-            ).T.reshape(-1, 2)
+            anchor_positives = np.array(np.meshgrid(q_indices, db_pos_indices)).T.reshape(-1, 2)
 
             # if triplets are being mined from the batch itself (query and database are the same)
             # then prune anchor_positives pairs in which the anchor and positive are both the same object
@@ -104,7 +102,7 @@ class FunctionNegativeTripletSelector(TripletSelector):
                     anchor_positives[:, 0] != anchor_positives[:, 1]
                 ]
             
-            anchor_negatives = np.array(np.meshgrid(q_indices, db_pos_indices)).T.reshape(-1, 2)  # All anchor-negative pairs
+            anchor_negatives = np.array(np.meshgrid(q_indices, db_neg_indices)).T.reshape(-1, 2)  # All anchor-negative pairs
 
             ap_distances = distance_matrix[anchor_positives[:, 0], anchor_positives[:, 1]]
             an_distances = distance_matrix[anchor_negatives[:, 0], anchor_negatives[:, 1]]
@@ -136,19 +134,19 @@ class FunctionNegativeTripletSelector(TripletSelector):
                 loss_vals = loss_vals.cpu().detach().numpy()
                 
                 if print_log:
-                    print(f'for anchor_positive=({a_idx}, {p_idx}) with distance={round(ap_dist, 4)}: loss_values={loss_vals}')
+                    print(f'for anchor_positive=({a_idx}, {p_idx}) with distance={round(ap_dist, 4)}: loss_values={np.round(loss_vals, decimals=4)}')
                 
                 n_sel = self.negative_selection_fn(loss_vals)
                 if n_sel is not None:
                     n_idx = db_neg_indices[n_sel]
                     if print_log:
-                        print(f'Semi-hard negative for anchor_positive ({a_idx}, {p_idx}) is: {n_idx}')
+                        print(f'Semi-hard negative index for anchor_positive ({a_idx}, {p_idx}) is: {n_idx}')
                     triplets.append([a_idx, p_idx, n_idx])
                 else:
                     fallback = random_hard_negative(loss_vals)
                     if fallback is not None:
                         if print_log:
-                            print(f'Random hard negative for anchor_positive ({a_idx}, {p_idx}) is: {n_idx}')
+                            print(f'Random hard negative index for anchor_positive ({a_idx}, {p_idx}) is: {n_idx}')
                         triplets.append([a_idx, p_idx, db_neg_indices[fallback]])
 
         if not triplets and db_neg_indices.size > 0:

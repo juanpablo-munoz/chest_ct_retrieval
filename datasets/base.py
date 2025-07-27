@@ -29,5 +29,11 @@ class LabelVectorHelper:
                 if lbl == k:
                     pos[k].append(idx)
                 else:
-                    neg[k].append(idx)
+                    label_vector = self.proximity_vector_labels_dict[lbl]
+                    classes_in_common = np.logical_and(vec, label_vector)
+                    no_classes_in_common = not np.array(classes_in_common).any()
+                    if no_classes_in_common:
+                        # A data sample pair (a, n) is a valid negative pair if their labels have no classes in common
+                        # ex. a=[1, 0, 0, 0] and n=[0, 1, 0, 0] is a valid negative pair; a=[0, 1, 1, 0] and n=[0, 0, 1, 1] is not
+                        neg[k].append(idx)
         return pos, neg

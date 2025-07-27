@@ -1,20 +1,19 @@
-from training.environment import configure_environment
 import torch
 from config.config import load_config
+from utils.seed import set_seed
+from training.setup import setup_training_run
+from training.environment import configure_environment
 from eval.metric_loader import load_metrics
 from training.data_setup import load_dataset, create_loaders
 from training.model_setup import initialize_model
-from training.setup import setup_training_run
 from training.trainer import Trainer
-from utils.seed import set_seed
 
 
+cuda_available = torch.cuda.is_available()
 
 cfg = load_config("config/base.yaml")
 
 set_seed(cfg["training"]["seed"])
-
-cuda_available = torch.cuda.is_available()
 
 run_dirs = setup_training_run(cfg["paths"]["dr2156"]["triplet_runs"])
 
@@ -23,18 +22,30 @@ tensorboard_dir = run_dirs["logs"]
 
 configure_environment(cfg)
 
-train_set, test_set, neg_compatibles = load_dataset(cfg["volume_dir"], cfg["seed"], cfg["train_fraction"])
+train_set, test_set, neg_compatibles = load_dataset(
+    cfg["paths"]["dr2156"]["preprocessed_300_int8"], 
+    cfg["training"]["seed"], 
+    float(cfg["dataset"]["train_frac"]),
+    augmentations_arg=cfg["training"]["augmentations"]
+)
 
 p_model, p_loss_fn, p_optimizer, p_scheduler = initialize_model(
-    embedding_size=cfg["embedding_size"],
-    margin=cfg["margin"],
-    lr=cfg["learning_rate"],
-    weight_decay=cfg["weight_decay"],
+    embedding_size=int(cfg["model"]["embedding_size"]),
+    margin=float(cfg["loss"]["margin"]),
+    lr=float(cfg["training"]["optimizer"]["lr"]),
+    weight_decay=float(cfg["training"]["optimizer"]["weight_decay"]),
     negative_compatibles_dict=neg_compatibles,
-    print_interval=cfg["logging"]["log_interval"],
+    print_interval=int(cfg["logging"]["log_interval"]),
     cuda=cuda_available
 )
-loaders = create_loaders(train_set, test_set, cfg["n_classes"], cfg["n_samples"], cuda_available)
+
+loaders = create_loaders(
+    train_set,
+    test_set,
+    cfg["training"]["batch"]["n_classes"],
+    cfg["training"]["batch"]["n_samples"],
+    cuda_available
+)
 
 p_metrics = load_metrics(cfg)
 
@@ -54,8 +65,9 @@ trainer = Trainer(
     log_interval=cfg["logging"]["log_interval"],
     checkpoint_dir=checkpoints_dir,
     tensorboard_logs_dir=tensorboard_dir,
-    train_full_loader_switch=cfg["train_full_loader_switch"],
+    train_full_loader_switch=cfg["training"]["train_full_loader_switch"],
     metrics=p_metrics,
     start_epoch=0,
+    accumulation_steps=3
 )
 trainer.fit()
