@@ -4,65 +4,86 @@ from torchvision import models
 from torch import autocast, float16
 
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision import models
+
 class Proximity100x100(nn.Module):
-    def __init__(self, embedding_size: int):
+    def __init__(self, embedding_size: int, num_classes: int = None, task: str = "embedding"):
+        """
+        task: 'embedding' or 'classification'
+        """
         super(Proximity100x100, self).__init__()
-        
+        assert task in ["embedding", "classification"]
+        self.task = task
+        self.embedding_size = embedding_size
+        self.num_classes = num_classes
+
         resnet = models.resnet18(weights='DEFAULT')
         self.features = nn.Sequential(*(list(resnet.children())[:-2]))
 
-        #conv input torch.Size([1,83,512,14,14])
         self.reducingconvs = nn.Sequential(
-            nn.Conv3d(100, 64, kernel_size = (3,3,3), stride=(3,1,1), padding=0),
+            nn.Conv3d(100, 64, kernel_size=(3,3,3), stride=(3,1,1), padding=0),
             nn.ReLU(True),
-            
-            nn.Conv3d(64, 32, kernel_size = (3,3,3), stride=(3,1,1), padding=0),
+            nn.Conv3d(64, 32, kernel_size=(3,1,1), stride=(3,1,1), padding=0),
             nn.ReLU(True),
-            
-            nn.Conv3d(32, 16, kernel_size = (3,2,2), stride=(3,2,2), padding=0),
+            nn.Conv3d(32, 16, kernel_size=(3,1,1), stride=(3,1,1), padding=0),
             nn.ReLU(True)
         )
-        
-        if embedding_size >= 1024:
-            self.fc = nn.Sequential(
-                nn.Linear(16*18*3*3, 1024, bias=False),
-                nn.ReLU(True),
-                nn.Dropout(0.5),
 
-                nn.Linear(1024, embedding_size, bias=False)
-            )
+        self.flattened_size = 16 * 18 * 3 * 3
+        #self.flattened_size = 16 * 18 * 1 * 1
 
-        else:
-            self.fc = nn.Sequential(
-                nn.Linear(16*18*3*3, 1024, bias=False),
-                nn.ReLU(True),
-                nn.Dropout(0.5),
-                
-                nn.Linear(1024, 512, bias=False), 
-                nn.ReLU(True),
-                nn.Dropout(0.5),
-                
-                nn.Linear(512, embedding_size, bias=False)
-            )
-      
+        self.fc = nn.Sequential(
+            nn.Linear(self.flattened_size, 512, bias=False),
+            nn.ReLU(True),
+            nn.Dropout(0.5),
+            nn.Linear(512, 256, bias=False),
+            nn.ReLU(True),
+            nn.Dropout(0.5),
+            nn.Linear(256, embedding_size, bias=False)
+        )
+
+        if self.task == "classification":
+            if num_classes is None:
+                raise ValueError("num_classes must be specified for classification task")
+            self.classifier = nn.Linear(embedding_size, num_classes, bias=True)
+
     def forward(self, x):
-        # input.shape = [batch_size, 300, 1, h, w]
-        shape = list(x.size())
-        print("input.shape:", shape)
-        batch_size = int(shape[0])
-        h, w = x.size()[-2:]
-        x = x.view(batch_size*100, 3, h, w) # x is 5D but Resnet expects a 4D input - so, let's squeeze the first dimension!
-        print("squeezed input.shape:", list(x.size()))
+        # x.shape: [B, 300, 1, H, W]
+        #print('(input) x.shape:', x.shape)
+        B, _, _, H, W = x.size()
+        x = x.view(B * 100, 3, H, W)
+        #print('(reshaped) x.shape:', x.shape)
+        #self.replace_bn_with_instancenorm(self.features, device=self.features[0].weight.device)
+        #self.features.eval()
+        #for param in self.features.parameters():
+        #    param.requires_grad = False
         x = self.features(x)
-        print('resnet output shape:', x.size())
-        x = x.view(batch_size,100,512,3,3) # Now, we bring back the first dimension for the 3DConvs!
+        x = x.view(B, 100, 512, 5, 5)
+        #print('features(x).shape:', x.shape)
         x = self.reducingconvs(x)
-        #reducingconvs output shape: torch.Size([batch_size, 16, 18, 3, 3])
-        print('reducingconvs output shape:', x.size())
-        x = x.view(batch_size, 16*18*3*3) # Flatten all except the first dimension
+        #print('reducingconvs(x).shape:', x.shape)
+        x = x.view(B, self.flattened_size)
+        #print('(reshaped) reducingconvs(x).shape:', x.shape)
         x = self.fc(x)
-        x = F.normalize(x, p=2, dim=1)
-        return x
+        #print('fc(x).shape:', x.shape)
+        if self.task == "embedding":
+            return F.normalize(x, p=2, dim=1)
+        elif self.task == "classification":
+            x = F.normalize(x, p=2, dim=1)
+            return self.classifier(x)  # raw logits (no softmax/sigmoid)
+    
+    def replace_bn_with_instancenorm(self, module, device):
+        for name, child in module.named_children():
+            if isinstance(child, nn.BatchNorm2d):
+                inst_norm = nn.InstanceNorm2d(child.num_features, affine=True).to(device)
+                setattr(module, name, inst_norm)
+            else:
+                self.replace_bn_with_instancenorm(child, device)
+
+
 
 class Proximity300x300(nn.Module):
     def __init__(self, embedding_size: int):
