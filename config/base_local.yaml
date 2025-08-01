@@ -16,7 +16,7 @@ training:
   batch:
     n_classes: 2
     n_samples: 3
-    batch_size: 6
+    batch_size: 4
   optimizer:
     type: adam
     lr: 1e-5

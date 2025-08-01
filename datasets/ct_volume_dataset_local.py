@@ -9,8 +9,16 @@ from datasets.constants import PROXIMITY_VECTOR_LABELS
 import zarr
 import fsspec
 import torch
+import torch.nn.functional as F
 import torchio as tio
 from torchvision.transforms import v2
+try:
+    import kornia
+    import kornia.augmentation as K
+    KORNIA_AVAILABLE = True
+except ImportError:
+    KORNIA_AVAILABLE = False
+    print("Warning: Kornia not available. GPU augmentations will be disabled.")
 
 class ProximityZarrPreprocessedCTTripletDataset(Dataset):
     def __init__(self, zarr_path_list, labels_list, train=True, augment=False):
@@ -94,18 +102,46 @@ class ProximityZarrPreprocessedCTTripletDataset(Dataset):
         return vol
 
 
+class SliceWise2DAugmentation(torch.nn.Module):
+    def __init__(self, p_affine=0.5, p_noise=0.5, p_hflip=0.5, p_vflip=0.5):
+        super().__init__()
+        self.affine = K.RandomAffine(
+            degrees=5.0,
+            translate=(0.1, 0.1),
+            scale=(0.9, 1.1),
+            p=p_affine,
+            same_on_batch=True  # ensures same transform for each slice in volume
+        )
+        self.noise = K.RandomGaussianNoise(mean=0., std=0.05, p=p_noise)
+        self.hflip = K.RandomHorizontalFlip(p=p_hflip)
+        self.vflip = K.RandomVerticalFlip(p=p_vflip)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, C, D, H, W = x.shape
+        x = x.permute(0, 2, 1, 3, 4).reshape(B * D, C, H, W)  # → [B×D, C, H, W]
+
+        # Apply the same transform per volume: group of D slices
+        x = self.affine(x)
+        x = self.noise(x)
+        x = self.hflip(x)
+        x = self.vflip(x)
+
+        x = x.reshape(B, D, C, H, W).permute(0, 2, 1, 3, 4)  # → [B, C, D, H, W]
+        return x
+
+
 class ProximityPreprocessedCTDataset(Dataset):
-    def __init__(self, embeddings_path_list, labels_list, train=True, augmentations=False):
+    def __init__(self, embeddings_path_list, labels_list, train=True, augmentations=False, device=None):
         self.rng = np.random.default_rng(seed=0)
         self.train = train
         self.paths = embeddings_path_list
         self.labels = labels_list
         self.augmentations = augmentations
-        #self.names = []
+        ##self.kornia_transforms = SliceWise2DAugmentation(p_affine=0.5, p_noise=0.5, p_hflip=0.5, p_vflip=0.5)
+        self.device = device or torch.device('cpu')
         self.label_vector_helper = LabelVectorHelper()
         self.label_to_indices = {label: np.where(self.labels == label)[0]
                                  for label in sorted(set(self.labels))}
-
 
         self.labels = np.array(self.labels)
         self.positive_pairs_dict, self.negative_pairs_dict = self.label_vector_helper.build_pair_indices(self.labels)
@@ -116,71 +152,113 @@ class ProximityPreprocessedCTDataset(Dataset):
                 for i in range(len(self))
             ]
 
-        # Define deterministic preprocessing
-        self.preprocess = tio.Compose([
-            tio.Resample(1),
-            tio.Resize([-1, 150, 150], image_interpolation='nearest'),
-            tio.RescaleIntensity(out_min_max=(0, 1))
-        ])
-
-        # Optional augmentation
-        self.tio_transforms = tio.Compose([
-            tio.RandomAffine(scales=(0.9, 1.1), degrees=10, p=0.5),
-            tio.RandomNoise(mean=0, std=(0, 0.05), p=0.5),
-        ])
-
-    def rand_flip(self, ctvol):
-        """Flip <ctvol> along a random axis with 50% probability"""
-        if self.rng.random() < 0.5:
-            chosen_axis = np.random.randint(low=0,high=3) #0, 1, and 2 are axis options
-            ctvol =  np.flip(ctvol, axis=chosen_axis)
-        return ctvol
-
-    def rand_rotate(self, ctvol):
-        """Rotate <ctvol> some random amount axially with 50% probability"""
-        if self.rng.random() < 0.5:
-            chosen_k = self.rng.choice([0, 1, 2, 3])
-            #ctvol = np.rot90(ctvol, k=chosen_k, axes=(1,2))
-        return ctvol
+        # Setup GPU-based augmentations using Kornia
+        if self.augmentations and KORNIA_AVAILABLE:
+            self.gpu_augmentations = SliceWise2DAugmentation(p_affine=0.5, p_noise=0.5, p_hflip=0.5, p_vflip=0.5)
+            # self.gpu_augmentations = K.AugmentationSequential(
+            #     K.RandomAffine3D(
+            #         degrees=((-1., 1.), (-10., 10.), -10, 10),
+            #         translate=(0.1, 0.1, 0.1),
+            #         scale=(0.9, 1.1),
+            #         p=0.5
+            #     ),
+            #     K.RandomGaussianNoise3D(mean=0., std=0.05, p=0.5),
+            #     K.RandomHorizontalFlip3D(p=0.5),
+            #     K.RandomVerticalFlip3D(p=0.5),
+            #     data_keys=["input"],
+            # )
+        else:
+            self.gpu_augmentations = None
 
     def __getitem__(self, index):
         if self.train:
             anchor_path = self.paths[index]
             anchor_label = self.labels[index]
             anchor_label_vector = self.label_vector_helper.get_label_vector(anchor_label)
-            #class_id = self.label_vector_helper.get_class_id(anchor_label)
         else:
             a_idx, p_idx, n_idx = self.test_triplets[index]
             anchor_path = self.paths[a_idx]
             anchor_label = self.labels[a_idx]
-        anchor = self._load_volume(anchor_path)
-        return anchor, anchor_label_vector
-        #return anchor, anchor_label
+            anchor_label_vector = self.label_vector_helper.get_label_vector(anchor_label)
+        
+        # Load volume with minimal CPU preprocessing
+        anchor = self._load_volume_minimal(anchor_path)
+        return anchor, np.array(anchor_label_vector)
 
     def __len__(self):
         return len(self.paths)
 
     def get_positives(self, anchor_idx):
-        #return self.positive_pairs_dict[self.label_vector_helper.get_class_id(self.labels[anchor_idx])]
         return self.positive_pairs_dict[self.labels[anchor_idx]]
 
     def get_negatives(self, anchor_idx):
-        #return self.negative_pairs_dict[self.label_vector_helper.get_class_id(self.labels[anchor_idx])]
         return self.negative_pairs_dict[self.labels[anchor_idx]]
 
-    def _load_volume(self, path):
-            with np.load(path) as data:
-                vol = data['volume']
-                vol = np.transpose(vol, axes=[3, 0, 1, 2]) # transpose [1, H, W, D] to [D, 1, H, W]
-                tio_image = tio.ScalarImage(tensor=vol, affine=np.eye(4))
-                tio_image = self.preprocess(tio_image)
-                if self.augmentations and self.train:
-                    tio_image = self.tio_transforms(tio_image)
-                    vol = self.rand_rotate(self.rand_flip(tio_image["data"].squeeze(0).numpy()))
-                vol -= 0.449 # Subtract ImageNet mean as we are using pretrained ResNet18 weights in the Proximity300x300 network
-                vol /= 0.226 # Divide by ImageNet std to complete Z-Normalization
-                vol = vol.astype(np.float32)
-                return vol # shape [ D, 1, H, W]
+    def _load_volume_minimal(self, path):
+        """Load volume with minimal CPU preprocessing, defer heavy work to GPU"""
+        with np.load(path) as data:
+            vol = data['volume']
+            # Minimal CPU preprocessing - just reshape and convert to tensor
+            vol = np.transpose(vol, axes=[3, 0, 1, 2])  # [1, H, W, D] to [D, 1, H, W]
+            vol = torch.from_numpy(vol).float()
+            return vol  # Return raw tensor for GPU processing
+
+    @staticmethod
+    def gpu_preprocess_batch(batch_tensors, device, target_hw_size=(100, 100)):
+        """Apply preprocessing on GPU for entire batch"""
+        # Move to GPU
+        if not batch_tensors.is_cuda:
+            batch_tensors = batch_tensors.to(device)
+        
+        # Input format: [B, D, 1, H, W] where D=300 (keep constant), H=300, W=300
+        B, D, C, H, W = batch_tensors.shape
+        
+        # Resize only height and width dimensions, keep depth (D) constant
+        # For 2D interpolation on each slice, we need to reshape to [B*D, C, H, W]
+        batch_tensors = batch_tensors.view(B * D, C, H, W)  # [B*D, 1, H, W]
+        
+        # Apply 2D bilinear interpolation to resize only H and W
+        batch_tensors = F.interpolate(
+            batch_tensors,  # [B*D, 1, H, W]
+            size=target_hw_size,  # (150, 150) - only height and width
+            mode='bilinear',
+            align_corners=False
+        )  # Output: [B*D, 1, 150, 150]
+        
+        # Reshape back to original format: [B, D, 1, H_new, W_new]
+        _, C, H_new, W_new = batch_tensors.shape
+        batch_tensors = batch_tensors.view(B, D, C, H_new, W_new)  # [B, 300, 1, 150, 150]
+        
+        # Rescale intensity to [0, 1]
+        batch_flat = batch_tensors.flatten(1)  # [B, D*1*H*W]
+        batch_min = batch_flat.min(dim=1, keepdim=True)[0]  # [B, 1]
+        batch_max = batch_flat.max(dim=1, keepdim=True)[0]  # [B, 1]
+        
+        # Reshape min/max to broadcast correctly
+        batch_min = batch_min.view(B, 1, 1, 1, 1)  # [B, 1, 1, 1, 1]
+        batch_max = batch_max.view(B, 1, 1, 1, 1)  # [B, 1, 1, 1, 1]
+        
+        batch_tensors = (batch_tensors - batch_min) / (batch_max - batch_min + 1e-8)
+        
+        # Apply ImageNet normalization for ResNet18 compatibility
+        batch_tensors = (batch_tensors - 0.449) / 0.226
+        
+        return batch_tensors
+
+    def apply_gpu_augmentations(self, batch_tensors):
+        """Apply GPU-based augmentations using Kornia"""
+        if self.gpu_augmentations is not None and self.train:
+            # Input format: [B, D, 1, H, W]
+            # Kornia expects [B, C, D, H, W] format
+            B, D, C, H, W = batch_tensors.shape
+            batch_tensors = batch_tensors.permute(0, 2, 1, 3, 4)  # [B, D, 1, H, W] -> [B, 1, D, H, W]
+            
+            batch_tensors = self.gpu_augmentations(batch_tensors)
+            
+            # Convert back to expected format: [B, D, 1, H, W]
+            batch_tensors = batch_tensors.permute(0, 2, 1, 3, 4)  # [B, 1, D, H, W] -> [B, D, 1, H, W]
+        
+        return batch_tensors
             
 
 class ProximityPrerocessedCTTripletDataset(Dataset):

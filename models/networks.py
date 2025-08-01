@@ -32,7 +32,7 @@ class Proximity100x100(nn.Module):
             nn.ReLU(True)
         )
 
-        self.flattened_size = 16 * 18 * 3 * 3
+        self.flattened_size = 16 * 18 * 2 * 2
         #self.flattened_size = 16 * 18 * 1 * 1
 
         self.fc = nn.Sequential(
@@ -61,7 +61,7 @@ class Proximity100x100(nn.Module):
         #for param in self.features.parameters():
         #    param.requires_grad = False
         x = self.features(x)
-        x = x.view(B, 100, 512, 5, 5)
+        x = x.view(B, 100, 512, 3, 3)
         #print('features(x).shape:', x.shape)
         x = self.reducingconvs(x)
         #print('reducingconvs(x).shape:', x.shape)
