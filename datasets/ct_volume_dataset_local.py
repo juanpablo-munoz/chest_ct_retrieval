@@ -291,7 +291,7 @@ class ProximityPrerocessedCTTripletDataset(Dataset):
                 if self.augmentations and self.train:
                     tio_image = self.tio_transforms(tio_image)
                     vol = self.rand_rotate(self.rand_flip(tio_image["data"].squeeze(0).numpy()))
-                vol -= 0.449 # Subtract ImageNet mean as we are using pretrained ResNet18 weights in the Proximity300x300 network
+                vol = ( vol - 0.449 ) / 0.226 # Subtract ImageNet mean and divide by its std as we are using pretrained ResNet18 weights in the network
                 return vol[np.newaxis] # shape [1, D, H, W]
             
 
