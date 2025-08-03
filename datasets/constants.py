@@ -21,4 +21,4 @@ PROXIMITY_VECTOR_LABELS_FOR_TRAINING = {
     7: [0,1,1,1],
 }
 
-PROXIMITY_CLASS_NAMES = ['sin anomalias', 'condensacion', 'nodulos', 'quistes']
+PROXIMITY_CLASS_NAMES = ['sin_anomalias', 'condensacion', 'nodulos', 'quistes']

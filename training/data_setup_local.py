@@ -11,16 +11,60 @@ from datasets.samplers import BalancedBatchSampler
 from datasets.loaders import TripletDataLoader
 from utils.compatibility import determine_negative_compatibles
 
-def collate_tensor_batch(batch):
-    samples = []
-    transposed_target = []
-    for sample, target in batch:
-        samples.append(sample)
-        transposed_target.append(target)
-    samples = torch.tensor(np.array(samples))
-    #transposed_target = np.array(transposed_target).transpose().tolist()
-    transposed_target = torch.tensor(transposed_target)
-    return samples, transposed_target
+import kornia.augmentation as K
+import torch.nn.functional as F
+from utils.transforms import RandomGaussianNoise3D
+
+ct_depth = 300
+ct_resize_H = 150
+ct_resize_W = 150
+
+gpu_aug = K.AugmentationSequential(
+    K.RandomAffine3D(degrees=(5, 5, 5), scale=(0.95, 1.05), p=0.5),
+    RandomGaussianNoise3D(mean=0.0, std=0.01, p=0.5),
+    data_keys=["input"]
+).to("cuda")
+
+def make_collate_tensor_batch(apply_gpu_aug: bool = False):
+    def collate_fn(batch):
+        samples = []
+        transposed_target = []
+
+        for sample, target in batch:
+            samples.append(sample)
+            transposed_target.append(target)
+
+        samples = torch.tensor(np.array(samples))  # shape: [B, D, 1, H, W]
+        transposed_target = torch.tensor(transposed_target)
+
+        samples = samples.to("cuda")
+        transposed_target = transposed_target.to("cuda")
+
+        # Convert to shape [B, C=1, D, H, W]
+        samples = samples.permute(0, 2, 1, 3, 4)
+
+        # Resize H and W
+        samples = F.interpolate(
+            samples,
+            size=[ct_depth, ct_resize_H, ct_resize_W],
+            mode='trilinear',
+            align_corners=False
+        )
+
+        # Visual augmentations (on GPU) if needed
+        if apply_gpu_aug:
+            samples = gpu_aug(samples)
+
+        # Back to initial shape [B, D, 1, H, W]
+        samples = samples.permute(0, 2, 1, 3, 4)
+
+        # Normalize
+        samples = (samples - 0.449) / 0.226
+
+        return samples, transposed_target
+
+    return collate_fn
+
 
 def collate_tensor_batch_vector_labels(batch):
     label_vector_helper = LabelVectorHelper()
@@ -64,7 +108,7 @@ def load_dataset(volume_dir, seed, train_frac, augmentations_arg):
     #test_set = ProximityZarrPreprocessedCTTripletDataset(x_test, y_test, train=False, augment=True)
     return train_set, test_set, determine_negative_compatibles(PROXIMITY_VECTOR_LABELS_FOR_TRAINING)
 
-def load_dataset_microf1(volume_dir, seed, train_frac, augmentations_arg):
+def load_dataset_microf1(volume_dir, seed, train_frac, train_eval_frac, augmentations_arg):
     paths = sorted(Path(volume_dir).glob("*.npz"))
     labels = []
     label_vector_helper = LabelVectorHelper()
@@ -79,13 +123,19 @@ def load_dataset_microf1(volume_dir, seed, train_frac, augmentations_arg):
         paths, labels_tensor, train_size=train_frac, stratify=labels_tensor, random_state=seed
     )
 
+    # Create stratified subset from training data for evaluation (subset of train, not separate split)
+    x_train_eval, _, y_train_eval, _ = train_test_split(
+        x_train, y_train, train_size=train_eval_frac, stratify=y_train, random_state=seed+1
+    )
+
     train_set = ProximityPreprocessedCTDataset(x_train, y_train, train=True, augmentations=augmentations_arg)
+    train_eval_set = ProximityPreprocessedCTDataset(x_train_eval, y_train_eval, train=False, augmentations=False)  # No augmentations for eval
     test_set = ProximityPreprocessedCTDataset(x_test, y_test, train=False, augmentations=False)
-    return train_set, test_set, determine_negative_compatibles(PROXIMITY_VECTOR_LABELS_FOR_TRAINING)
+    return train_set, train_eval_set, test_set, determine_negative_compatibles(PROXIMITY_VECTOR_LABELS_FOR_TRAINING)
 
 
 def create_loaders(train_set, test_set, n_classes, n_samples, cuda):
-    kwargs = {'num_workers': 0, 'pin_memory': True} if cuda else {}
+    kwargs = {'num_workers': 2, 'pin_memory': True} if cuda else {}
 
     sampler_train = BalancedBatchSampler(
         train_set.labels, PROXIMITY_VECTOR_LABELS_FOR_TRAINING, n_classes, n_samples, multilabel=True
@@ -97,18 +147,19 @@ def create_loaders(train_set, test_set, n_classes, n_samples, cuda):
     batch_size = n_classes * n_samples
 
     return {
-        "train_eval": DataLoader(train_set, collate_fn=collate_tensor_batch, batch_size=batch_size, shuffle=False, **kwargs),
-        "test_eval": DataLoader(test_set, collate_fn=collate_tensor_batch, batch_size=batch_size, shuffle=False, **kwargs),
-        "train_triplet": DataLoader(train_set, collate_fn=collate_tensor_batch, batch_sampler=sampler_train, **kwargs),
-        "test_triplet": DataLoader(test_set, collate_fn=collate_tensor_batch, batch_sampler=sampler_test, **kwargs),
+        "train_eval": DataLoader(train_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
+        "test_eval": DataLoader(test_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
+        "train_triplet": DataLoader(train_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=True), batch_sampler=sampler_train, **kwargs),
+        "test_triplet": DataLoader(test_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=False), batch_sampler=sampler_test, **kwargs),
         "all_triplet_train": TripletDataLoader(train_set, n_classes=n_classes, n_samples=n_samples, **kwargs),
         "all_triplet_test": TripletDataLoader(test_set, n_classes=n_classes, n_samples=n_samples, **kwargs),
     }
 
-def create_loaders_microf1(train_set, test_set, batch_size, cuda):
-    kwargs = {'num_workers': 0, 'pin_memory': True} if cuda else {}
+def create_loaders_microf1(train_set, train_eval_set, test_set, batch_size, cuda):
+    kwargs = {'num_workers': 0, 'prefetch_factor': None, 'persistent_workers': False, 'pin_memory': False} if cuda else {}
 
     return {
-        "train": DataLoader(train_set, collate_fn=collate_tensor_batch, batch_size=batch_size, **kwargs),
-        "test": DataLoader(test_set, collate_fn=collate_tensor_batch, batch_size=batch_size, shuffle=False, **kwargs),
+        "train": DataLoader(train_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=True), batch_size=batch_size, **kwargs),
+        "train_eval": DataLoader(train_eval_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
+        "test": DataLoader(test_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
     }

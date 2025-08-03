@@ -3,6 +3,7 @@ import torch
 from torcheval.metrics import BinaryPrecision, BinaryRecall, BinaryF1Score
 from sklearn.metrics import classification_report, ndcg_score, jaccard_score
 from utils.utils import pdist, query_dataset_dist
+from datasets.base import LabelVectorHelper
 
 
 class Metric:
@@ -952,6 +953,7 @@ class AllMetrics(Metric):
         self.recall_aggregated = dict()
         self.precision_aggregated = dict()
         self.average_precision_aggregated = dict()
+        self.label_vector_helper = LabelVectorHelper()
     
     def get_query_per_class_relevance(self, query, result):
         query = np.array(query)
@@ -998,7 +1000,7 @@ class AllMetrics(Metric):
     def relevance_metric(self, query_vector, query_results_list):
         query = np.array(query_vector) # query vector
         results = np.array(query_results_list) # lists of results as vectors
-        query_relevances = np.sum(query & results, axis=-1) / np.sum(query | results, axis=-1)
+        query_relevances = np.sum(query & results, axis=-1) / np.sum(query | results, axis=-1) # Jaccard similarity
         return query_relevances
 
 
@@ -1019,21 +1021,63 @@ class AllMetrics(Metric):
         per_class_precision = {k_original: np.sum(relevances[:k])/k for k, k_original in zip(k_top, self.k)}
         return per_class_precision
     
+    # def calculate_per_class_average_precision(self, query_vector, relevances):
+    #     relevances = np.array(relevances)
+    #     k_top = [min(k, len(relevances)) for k in self.k]
+    #     per_class_avg_precision = dict()
+    #     for i, class_is_queried in enumerate(query_vector):
+    #         if class_is_queried == 0:
+    #             continue
+    #         current_class = self.classes_list[i]
+    #         per_class_avg_precision[current_class] = {k: np.sum([relevances[j, i] * np.sum(relevances[:j+1, i])/(j+1) for j in range(k)])/k for k in k_top}
+    #     return per_class_avg_precision
+    
     def calculate_per_class_average_precision(self, query_vector, relevances):
         relevances = np.array(relevances)
         k_top = [min(k, len(relevances)) for k in self.k]
-        per_class_avg_precision = dict()
+        per_class_avg_precision = {}
+
         for i, class_is_queried in enumerate(query_vector):
             if class_is_queried == 0:
                 continue
             current_class = self.classes_list[i]
-            per_class_avg_precision[current_class] = {k: np.sum([relevances[j, i] * np.sum(relevances[:j+1, i])/(j+1) for j in range(k)])/k for k in k_top}
+            per_class_avg_precision[current_class] = {}
+
+            rel_column = relevances[:, i]
+
+            for k_val, k_original in zip(k_top, self.k):
+                rel_k = rel_column[:k_val]
+                if rel_k.sum() == 0:
+                    per_class_avg_precision[current_class][k_original] = 0.0
+                    continue
+                precisions = [(rel_k[:j+1].sum()) / (j+1) for j in range(k_val)]
+                weighted_precisions = [p * r for p, r in zip(precisions, rel_k)]
+                ap = np.sum(weighted_precisions) / rel_k.sum()
+                per_class_avg_precision[current_class][k_original] = ap
+
         return per_class_avg_precision
-    
+
+    # def calculate_average_precision(self, relevances):
+    #     relevances = np.array(relevances)
+    #     k_top = [min(k, len(relevances)) for k in self.k]
+    #     avg_precision = {k_original: np.sum([relevances[i] * np.sum(relevances[:i+1])/(i+1) for i in range(k)])/k for k, k_original in zip(k_top, self.k)}
+    #     return avg_precision
+
     def calculate_average_precision(self, relevances):
         relevances = np.array(relevances)
         k_top = [min(k, len(relevances)) for k in self.k]
-        avg_precision = {k_original: np.sum([relevances[i] * np.sum(relevances[:i+1])/(i+1) for i in range(k)])/k for k, k_original in zip(k_top, self.k)}
+        avg_precision = {}
+
+        for k_val, k_original in zip(k_top, self.k):
+            rel_k = relevances[:k_val]
+            rel_cumsum = np.cumsum(rel_k)
+            precisions = rel_cumsum / np.arange(1, k_val + 1) # P(i)
+            weighted_precisions = precisions * rel_k # P(i) * r_i
+
+            denom = rel_k.sum()
+            ap = weighted_precisions.sum() / denom if denom > 0 else 0.0
+            avg_precision[k_original] = ap
+
         return avg_precision
 
     def calculate_per_class_recall(self, query_vector, relevances):
@@ -1047,7 +1091,7 @@ class AllMetrics(Metric):
             current_class = self.classes_list[i]
             per_class_recall[current_class] = {k: np.sum(relevances[:k, i])/max(1., total_relevants_per_class[i]) for k in k_top}
         return per_class_recall
-    
+
     def calculate_recall(self, relevances):
         total_relevants = np.sum(relevances, axis=-1)
         relevances = np.array(relevances)
@@ -1086,10 +1130,19 @@ class AllMetrics(Metric):
         sorted_distance_matrix, sorted_args = distances_matrix.sort(axis=-1) # sorted distances in increasing order
         if training:
             sorted_distance_matrix = sorted_distance_matrix[:, 1:].numpy() 
-            sorted_args = sorted_args[:, 1:].numpy() # remove first column because it is the self-distance (always zero)
+            sorted_args = sorted_args[:, 1:].numpy() # remove first column because it is the self-distance (always zero) 
         dataset_labels = dataset_labels.numpy()
+        if not hasattr(dataset_labels[0], 'shape'):
+            dataset_vectors = np.array([self.proximity_vector_labels_dict[d.item()] for d in dataset_labels])
+        else:
+            dataset_vectors = dataset_labels
+            dataset_labels = [self.label_vector_helper.get_class_id(lbl.tolist()) for lbl in dataset_labels]
         query_labels = query_labels.numpy()
-        query_vectors = np.array([self.proximity_vector_labels_dict[q.item()] for q in query_labels])
+        if not hasattr(query_labels[0], 'shape'):
+            query_vectors = np.array([self.proximity_vector_labels_dict[q.item()] for q in query_labels])
+        else:
+            query_vectors = query_labels
+            query_labels = [self.label_vector_helper.get_class_id(lbl.tolist()) for lbl in query_labels]
         #first_results_args = sorted_args[:, 0]
         #first_results_labels = np.array([dataset_labels[r] for r in first_results_args])
         #first_results_vectors = np.array([self.proximity_vector_labels_dict[r.item()] for r in first_results_labels])
@@ -1097,11 +1150,11 @@ class AllMetrics(Metric):
             #row = row.cpu().numpy().tolist()
             #print(f'{mode_string} Processing query {i+1}/{len(sorted_args)}')
             #print(f'{mode_string} Getting current_query_label...')
-            current_query_label = query_labels[i].item()
+            current_query_label = query_labels[i]
             #print(f'{mode_string} Getting current_query_vector...')
             current_query_vector = query_vectors[i]
             #print(f'{mode_string} Getting results_labels...')
-            results_labels = [dataset_labels[i].item() for i in row]
+            results_labels = [dataset_labels[i] for i in row]
             #print(f'{mode_string} Getting results_vector_list...')
             results_vector_list = [self.proximity_vector_labels_dict[r] for r in results_labels]
             #print(f'{mode_string} Getting per_class_relevance_scores...')
@@ -1113,7 +1166,7 @@ class AllMetrics(Metric):
             #print(f'{mode_string} Getting results_ideal_scores_order...')
             results_ideal_scores_order = sorted(row, key=lambda v: self.relevance_orders[current_query_label].index(dataset_labels[v]))
             #print(f'{mode_string} Getting results_ideal_scores_labels...')
-            results_ideal_scores_labels = [dataset_labels[i].item() for i in results_ideal_scores_order]
+            results_ideal_scores_labels = [dataset_labels[i] for i in results_ideal_scores_order]
             #print(f'{mode_string} Getting results_ideal_scores_vectors...')
             results_ideal_scores_vectors = [self.proximity_vector_labels_dict[r] for r in results_ideal_scores_labels]
             #print(f'{mode_string} Getting ideal_relevance_scores...')

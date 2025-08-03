@@ -1,9 +1,10 @@
 dataset:
-  train_frac: 0.8
+  train_frac: 0.85
+  train_eval_frac: 0.1
 
 model:
   type: Proximity100x100
-  embedding_size: 512
+  embedding_size: 1024
 
 loss:
   type: OnlineTripletLoss
@@ -16,18 +17,18 @@ training:
   batch:
     n_classes: 2
     n_samples: 3
-    batch_size: 6
+    batch_size: 8
   optimizer:
     type: adam
-    lr: 1e-5
+    lr: 5e-5
     weight_decay: 1e-4
   scheduler:
     step_size: 50
     gamma: 0.1
   metrics:
     loss: True
-    average_nonzero_triplets: True
-    total_nonzero_triplets: True
+    average_nonzero_triplets: False
+    total_nonzero_triplets: False
     ndcg: False
     recall: False
     all_metrics: True
@@ -42,6 +43,7 @@ paths:
     datarelease: DR2156
     ct: DR2156_studies
     labels: DR2156_labels\\DR2156_labels.csv
+    preprocessed_270_uint8: data\\DR2156\\DR2156_270_preprocessed_uint8
     preprocessed_300: data\\DR2156\\DR2156_300_preprocessed
     preprocessed_300_int8: data\\DR2156\\DR2156_300_preprocessed_int8
     preprocessed_300_zarr: data\\DR2156\\DR2156_300_preprocessed_zarr
@@ -52,4 +54,4 @@ paths:
     microf1_runs: runs_microf1
 
 logging:
-  log_interval: 10
+  log_interval: 1

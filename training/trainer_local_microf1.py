@@ -11,12 +11,13 @@ import torch.nn.functional as F
 from losses.losses_local import GradedMicroF1Loss
 
 class Trainer:
-    def __init__(self, train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, metrics=[], start_epoch=0, accumulation_steps=1) -> None:
+    def __init__(self, train_loader, train_eval_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, metrics=[], start_epoch=0, accumulation_steps=1) -> None:
         self.last_train_loss = np.inf
         self.best_val_loss = np.inf
         self.val_map_at_k = []
         self.val_micro_f1 = []
         self.train_loader = train_loader
+        self.train_eval_loader = train_eval_loader
         self.val_loader = val_loader
         self.model = model
         self.loss_fn = loss_fn
@@ -146,6 +147,7 @@ class Trainer:
         self.optimizer.zero_grad()
         total_loss = 0.0
         losses = []
+        print_loss = None
         accumulation_counter = 0
         
         # Training loop - only calculate loss and update weights
@@ -163,8 +165,15 @@ class Trainer:
                 outputs = self.model(data)
                 
                 # For micro-F1 loss, outputs should be logits and target should be relevance vectors
+                #print('outputs:', outputs)
+                #print('target:', target)
                 loss = self.loss_fn(outputs, target)
-                
+                total_loss += loss.item()
+                print_loss = loss.item()
+        
+            # Track batch loss
+            losses.append(loss.item())
+
             # Scale loss by accumulation steps
             loss = loss / self.accumulation_steps
             
@@ -172,9 +181,6 @@ class Trainer:
                 self.scaler.scale(loss).backward()
             else:
                 loss.backward()
-            
-            losses.append(loss.item())
-            total_loss += loss.item()
             
             # Perform optimizer step only when accumulation_counter reaches accumulation_steps
             if accumulation_counter % self.accumulation_steps == 0:
@@ -186,7 +192,10 @@ class Trainer:
                 self.optimizer.zero_grad()
             
             if batch_idx % self.log_interval == 0:
-                print(f'Batch {batch_idx}/{len(self.train_loader)}: Loss = {loss.item():.6f}')
+                print(f'\nBatch {batch_idx}/{len(self.train_loader)}: Loss = {print_loss:.5f}')
+
+            if accumulation_counter >= np.inf: # Early stopping for debugging
+                break
         
         in_epoch_mean_train_loss = sum(losses) / len(losses) if losses else 0.0
         
@@ -198,7 +207,7 @@ class Trainer:
         all_losses = []
         
         with torch.no_grad():
-            for data, target in tqdm(self.train_loader):
+            for data, target in tqdm(self.train_eval_loader):
                 target = target if len(target) > 0 else None
                 
                 if self.cuda:
@@ -206,15 +215,9 @@ class Trainer:
                     if target is not None:
                         target = target.cuda()
                 
-                # Extract embeddings from second-to-last layer for classification task
-                B, _, _, H, W = data.size()
-                x = data.view(B * 100, 3, H, W)
-                x = self.model.features(x)
-                x = x.view(B, 100, 512, 10, 10)
-                x = self.model.reducingconvs(x)
-                x = x.view(B, self.model.flattened_size)
-                embeddings = self.model.fc(x)
-                embeddings = F.normalize(embeddings, p=2, dim=1)  # Second-to-last layer
+                # Extract embeddings using the model's get_embeddings method with autocast
+                with autocast('cuda', enabled=self.use_amp):
+                    embeddings = self.model.get_embeddings(data, use_autocast=True)
                 
                 all_embeddings.append(embeddings.cpu())
                 all_labels.append(target.cpu())
@@ -223,6 +226,8 @@ class Trainer:
                 logits = self.model.classifier(embeddings)
                 
                 # Calculate loss using micro-F1 loss
+                #print('logits:', logits)
+                #print('target:', target)
                 loss = self.loss_fn(logits, target)
                 all_losses.append(loss.item())
         
@@ -231,14 +236,14 @@ class Trainer:
             all_embeddings = torch.cat(all_embeddings, dim=0)
             all_labels = torch.cat(all_labels, dim=0)
         
-        post_epoch_mean_train_loss = np.append(all_losses)
+        post_epoch_mean_train_loss = sum(all_losses) / len(all_losses) if len(all_losses) > 0 else 0.0
 
         # Store training embeddings and labels for use in test_epoch
         self.train_embeddings = all_embeddings
         self.train_labels = all_labels
 
-        print('in_epoch_mean_train_loss =', in_epoch_mean_train_loss)
-        print('post_epoch_mean_train_loss =', post_epoch_mean_train_loss)
+        print('in_epoch_mean_train_loss =', np.round(in_epoch_mean_train_loss, 5))
+        print('post_epoch_mean_train_loss =', np.round(post_epoch_mean_train_loss, 5))
         
         for metric in self.metrics:
             with torch.no_grad():
@@ -277,15 +282,8 @@ class Trainer:
                         target = target.cuda()
                 
                 with autocast('cuda', enabled=self.use_amp):
-                    # Extract embeddings from second-to-last layer for classification task
-                    B, _, _, H, W = data.size()
-                    x = data.view(B * 100, 3, H, W)
-                    x = self.model.features(x)
-                    x = x.view(B, 100, 512, 10, 10)
-                    x = self.model.reducingconvs(x)
-                    x = x.view(B, self.model.flattened_size)
-                    embeddings = self.model.fc(x)
-                    embeddings = F.normalize(embeddings, p=2, dim=1)  # Second-to-last layer
+                    # Extract embeddings using the model's get_embeddings method
+                    embeddings = self.model.get_embeddings(data, use_autocast=True)
                     
                     # Get logits for loss calculation by applying classifier to embeddings
                     logits = self.model.classifier(embeddings)
@@ -297,6 +295,9 @@ class Trainer:
                 val_embeddings.append(embeddings.cpu())
                 val_labels.append(target.cpu())
             
+                if len(losses) >= np.inf:
+                    break # early stop for debugging
+
             mean_val_loss = sum(losses) / len(losses) if losses else 0.0
             
             # Concatenate validation embeddings and labels

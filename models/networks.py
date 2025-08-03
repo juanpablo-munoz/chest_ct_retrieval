@@ -2,6 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
 from torch import autocast, float16
+import numpy as np
 
 
 import torch
@@ -18,6 +19,8 @@ class Proximity100x100(nn.Module):
         assert task in ["embedding", "classification"]
         self.task = task
         self.embedding_size = embedding_size
+        self.input_H, self.input_W = 150, 150
+        self.updated_layer_sizes = False
         self.num_classes = num_classes
 
         resnet = models.resnet18(weights='DEFAULT')
@@ -32,57 +35,113 @@ class Proximity100x100(nn.Module):
             nn.ReLU(True)
         )
 
-        self.flattened_size = 16 * 18 * 3 * 3
-        #self.flattened_size = 16 * 18 * 1 * 1
+        self.features_output_size = [512, int(np.ceil(self.input_H/32)), int(np.ceil(self.input_W/32))]
+        self.flattened_size = 16 * 18 * (self.features_output_size[1] - 2) * (self.features_output_size[2] - 2)
+
+        self.potential_fc_layer_sizes = [4096, 2048]
+        self.fc_layer_sizes = [self.bound_layer_size(l) for l in self.potential_fc_layer_sizes]
 
         self.fc = nn.Sequential(
-            nn.Linear(self.flattened_size, 512, bias=False),
+            nn.Linear(self.flattened_size, self.fc_layer_sizes[0], bias=False),
             nn.ReLU(True),
             nn.Dropout(0.5),
-            nn.Linear(512, 256, bias=False),
+            nn.Linear(self.fc_layer_sizes[0], self.fc_layer_sizes[1], bias=False),
             nn.ReLU(True),
             nn.Dropout(0.5),
-            nn.Linear(256, embedding_size, bias=False)
+            nn.Linear(self.fc_layer_sizes[1], self.embedding_size, bias=False)
         )
 
         if self.task == "classification":
-            if num_classes is None:
+            if self.num_classes is None:
                 raise ValueError("num_classes must be specified for classification task")
-            self.classifier = nn.Linear(embedding_size, num_classes, bias=True)
+            self.classifier = nn.Linear(self.embedding_size, self.num_classes, bias=True)
 
+    def _calculate_flattened_size(self, input_shape):
+        """Calculate flattened_size dynamically based on input dimensions"""
+        B, _, _, H, W = input_shape
+
+        self.input_H = H
+        self.input_W = W
+        
+        # Simulate forward pass through features and reducingconvs to get output size
+        with torch.no_grad():
+            # Create dummy input to calculate dimensions
+            dummy_input = torch.zeros(1, 3, H, W)
+            
+            # Pass through features (ResNet18 backbone)
+            dummy_features = self.features(dummy_input)
+            _, channels, feat_h, feat_w = dummy_features.shape
+            
+            # Reshape for 3D convs: [B, 100, channels, feat_h, feat_w]
+            dummy_3d = dummy_features.unsqueeze(0).expand(1, 100, channels, feat_h, feat_w)
+            
+            # Pass through reducing convs
+            dummy_reduced = self.reducingconvs(dummy_3d)
+            
+            # Calculate flattened size
+            flattened_size = dummy_reduced.numel() // dummy_reduced.size(0)
+            
+        return flattened_size
+    
+    def get_embeddings(self, x, use_autocast=False):
+        """Extract embeddings from the model (second-to-last layer)"""
+        # x.shape: [B, 300, 1, H, W]
+        B, _, _, H, W = x.size()
+        if not self.updated_layer_sizes:
+            self.update_layer_sizes(H, W)
+        
+        if use_autocast:
+            with autocast('cuda', enabled=True):
+                return self._compute_embeddings(x, B, H, W)
+        else:
+            return self._compute_embeddings(x, B, H, W)
+    
+    def _compute_embeddings(self, x, B, H, W):
+        """Internal method to compute embeddings"""
+        # Reshape for ResNet processing
+        x = x.view(B * 100, 3, H, W)
+        
+        # Pass through ResNet features
+        x = self.features(x)
+        
+        # Reshape for 3D conv processing
+        channels, feat_h, feat_w = self.features_output_size
+        x = x.view(B, 100, channels, feat_h, feat_w)
+        
+        # Pass through reducing convolutions
+        x = self.reducingconvs(x)
+        
+        # Flatten
+        x = x.view(B, self.flattened_size)
+        
+        # Get embeddings (second-to-last layer)
+        x = self.fc(x)
+        
+        # Normalize embeddings
+        return F.normalize(x, p=2, dim=1)
+    
     def forward(self, x):
         # x.shape: [B, 300, 1, H, W]
-        #print('(input) x.shape:', x.shape)
-        B, _, _, H, W = x.size()
-        x = x.view(B * 100, 3, H, W)
-        #print('(reshaped) x.shape:', x.shape)
-        #self.replace_bn_with_instancenorm(self.features, device=self.features[0].weight.device)
-        #self.features.eval()
-        #for param in self.features.parameters():
-        #    param.requires_grad = False
-        x = self.features(x)
-        x = x.view(B, 100, 512, 5, 5)
-        #print('features(x).shape:', x.shape)
-        x = self.reducingconvs(x)
-        #print('reducingconvs(x).shape:', x.shape)
-        x = x.view(B, self.flattened_size)
-        #print('(reshaped) reducingconvs(x).shape:', x.shape)
-        x = self.fc(x)
-        #print('fc(x).shape:', x.shape)
         if self.task == "embedding":
-            return F.normalize(x, p=2, dim=1)
+            return self.get_embeddings(x)
         elif self.task == "classification":
-            x = F.normalize(x, p=2, dim=1)
-            return self.classifier(x)  # raw logits (no softmax/sigmoid)
-    
-    def replace_bn_with_instancenorm(self, module, device):
-        for name, child in module.named_children():
-            if isinstance(child, nn.BatchNorm2d):
-                inst_norm = nn.InstanceNorm2d(child.num_features, affine=True).to(device)
-                setattr(module, name, inst_norm)
-            else:
-                self.replace_bn_with_instancenorm(child, device)
+            embeddings = self.get_embeddings(x)
+            return self.classifier(embeddings)  # raw logits (no softmax/sigmoid)
 
+    def update_layer_sizes(self, h, w):
+        self.input_H, self.input_W = h, w
+        self.features_output_size = [512, int(np.ceil(self.input_H/32)), int(np.ceil(self.input_W/32))]
+        self.flattened_size = 16 * 18 * (self.features_output_size[1] - 2) * (self.features_output_size[2] - 2)
+        self.fc_layer_sizes = [self.bound_layer_size(l) for l in self.potential_fc_layer_sizes]
+        self.updated_layer_sizes = True
+
+    def bound_layer_size(self, layer_size):
+        if layer_size <= self.flattened_size and layer_size >= self.embedding_size:
+            return layer_size
+        elif layer_size > self.flattened_size:
+            return self.flattened_size
+        else:
+            return self.embedding_size
 
 
 class Proximity300x300(nn.Module):

@@ -6,6 +6,8 @@ import os
 from datasets.base import LabelVectorHelper
 from datasets.constants import PROXIMITY_VECTOR_LABELS
 
+import time
+
 import zarr
 import fsspec
 import torch
@@ -147,13 +149,13 @@ class ProximityPreprocessedCTDataset(Dataset):
         if self.train:
             anchor_path = self.paths[index]
             anchor_label = self.labels[index]
-            anchor_label_vector = self.label_vector_helper.get_label_vector(anchor_label)
             #class_id = self.label_vector_helper.get_class_id(anchor_label)
         else:
             a_idx, p_idx, n_idx = self.test_triplets[index]
             anchor_path = self.paths[a_idx]
             anchor_label = self.labels[a_idx]
         anchor = self._load_volume(anchor_path)
+        anchor_label_vector = self.label_vector_helper.get_label_vector(anchor_label)
         return anchor, anchor_label_vector
         #return anchor, anchor_label
 
@@ -169,18 +171,39 @@ class ProximityPreprocessedCTDataset(Dataset):
         return self.negative_pairs_dict[self.labels[anchor_idx]]
 
     def _load_volume(self, path):
-            with np.load(path) as data:
-                vol = data['volume']
-                vol = np.transpose(vol, axes=[3, 0, 1, 2]) # transpose [1, H, W, D] to [D, 1, H, W]
-                tio_image = tio.ScalarImage(tensor=vol, affine=np.eye(4))
-                tio_image = self.preprocess(tio_image)
-                if self.augmentations and self.train:
-                    tio_image = self.tio_transforms(tio_image)
-                    vol = self.rand_rotate(self.rand_flip(tio_image["data"].squeeze(0).numpy()))
-                vol -= 0.449 # Subtract ImageNet mean as we are using pretrained ResNet18 weights in the Proximity300x300 network
-                vol /= 0.226 # Divide by ImageNet std to complete Z-Normalization
-                vol = vol.astype(np.float32)
-                return vol # shape [ D, 1, H, W]
+        #t0 = time.time()
+        with np.load(path) as data:
+            #t1 = time.time()
+            vol = data['volume']
+            #t2 = time.time()
+            vol = np.transpose(vol, axes=[3, 0, 1, 2]) # transpose [1, H, W, D] to [D, 1, H, W]
+            #vol = np.transpose(vol, axes=[0, 3, 1, 2]) # transpose [1, H, W, D] to [1, D, H, W]
+            #t3 = time.time()
+            #tio_image = tio.ScalarImage(tensor=vol, affine=np.eye(4))
+            #t4 = time.time()
+            #tio_image = self.preprocess(tio_image)
+            #t5 = time.time()
+            if self.augmentations and self.train:
+                #t6 = time.time()
+                #tio_image = self.tio_transforms(tio_image)
+                #t7 = time.time()
+                #vol = self.rand_rotate(self.rand_flip(tio_image["data"].squeeze(0).numpy()))
+                pass
+            else:
+                #t6 = time.time()
+                #vol = tio_image["data"].squeeze(0).numpy()
+                #t7 = time.time()
+                pass
+            #t8 = time.time()
+            #vol = ( vol - 0.449 ) / 0.226 # Subtract ImageNet mean and divide by its std as we are using pretrained ResNet18 weights in the network
+            #t9 = time.time()
+            vol = vol.astype(np.float16)
+            #t10 = time.time()
+            #times = [t0,t1,t2,t3,t4,t5,t6,t7,t8,t9,t10]
+            #times_str_list = [f't{i}: {times[i]-times[0]}' for i in range(len(times))]
+            #times_str = '\n'.join(times_str_list)
+            #print(times_str)
+            return vol # shape [ D, 1, H, W]
             
 
 class ProximityPrerocessedCTTripletDataset(Dataset):
