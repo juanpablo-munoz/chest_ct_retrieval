@@ -3,6 +3,7 @@ data/
 
 # Ignore run logs dir
 runs/
+runs_microf1/
 
 # Ignore checkpoints and large logs
 *.pth
