@@ -205,7 +205,8 @@ class Trainer:
         all_embeddings = []
         all_labels = []
         all_losses = []
-        
+        predicted_logits = []
+
         with torch.no_grad():
             for data, target in tqdm(self.train_eval_loader):
                 target = target if len(target) > 0 else None
@@ -224,6 +225,7 @@ class Trainer:
 
                 # Get logits for loss calculation by applying classifier to embeddings
                 logits = self.model.classifier(embeddings)
+                predicted_logits.append(logits.cpu())
                 
                 # Calculate loss using micro-F1 loss
                 #print('logits:', logits)
@@ -231,10 +233,14 @@ class Trainer:
                 loss = self.loss_fn(logits, target)
                 all_losses.append(loss.item())
         
+                if len(all_losses) >= np.inf: # Early stopping for debugging
+                    break
+
         # Concatenate all embeddings and labels for metrics calculation
         if all_embeddings and all_labels:
             all_embeddings = torch.cat(all_embeddings, dim=0)
             all_labels = torch.cat(all_labels, dim=0)
+            predicted_logits = torch.cat(predicted_logits, dim=0)
         
         post_epoch_mean_train_loss = sum(all_losses) / len(all_losses) if len(all_losses) > 0 else 0.0
 
@@ -244,6 +250,7 @@ class Trainer:
 
         print('in_epoch_mean_train_loss =', np.round(in_epoch_mean_train_loss, 5))
         print('post_epoch_mean_train_loss =', np.round(post_epoch_mean_train_loss, 5))
+        #print('predicted_logits:', predicted_logits)
         
         for metric in self.metrics:
             with torch.no_grad():
@@ -252,6 +259,7 @@ class Trainer:
                     all_embeddings,  # Training embeddings
                     all_labels,      # Training labels
                     all_embeddings,  # Use same for both query and db
+                    predicted_logits,# predicted labels
                     all_labels,      # Use same for both query and db
                     post_epoch_mean_train_loss,
                     [],  # No triplets
@@ -272,6 +280,7 @@ class Trainer:
             losses = []
             val_embeddings = []
             val_labels = []
+            val_predicted_logits = []
             
             for data, target in tqdm(self.val_loader):
                 target = target if len(target) > 0 else None
@@ -287,6 +296,7 @@ class Trainer:
                     
                     # Get logits for loss calculation by applying classifier to embeddings
                     logits = self.model.classifier(embeddings)
+                    val_predicted_logits.append(logits.cpu())
                     
                     # Calculate loss using micro-F1 loss
                     loss = self.loss_fn(logits, target)
@@ -304,6 +314,7 @@ class Trainer:
             if val_embeddings and val_labels:
                 val_embeddings = torch.cat(val_embeddings, dim=0)
                 val_labels = torch.cat(val_labels, dim=0)
+                val_predicted_logits = torch.cat(val_predicted_logits, dim=0)
             
             # Use training embeddings from train_epoch as database
             for metric in self.metrics:
@@ -313,6 +324,7 @@ class Trainer:
                         self.train_embeddings,  # Database embeddings (training set)
                         self.train_labels,      # Database labels (training set)
                         val_embeddings,         # Query embeddings (validation set)
+                        val_predicted_logits,   # Predicted labels
                         val_labels,             # Query labels (validation set)
                         mean_val_loss,
                         [],  # No triplets

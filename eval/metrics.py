@@ -246,10 +246,11 @@ class Loss(Metric):
     def __init__(self):
         self.loss = -1.
 
-    def __call__(self, epoch_number, dataset_embeddings, dataset_labels, query_embeddings, query_labels, loss, n_triplets_list, tensorboard_writer, training=True):
+    def __call__(self, epoch_number, dataset_embeddings, dataset_labels, query_embeddings, query_predicted_logits, query_labels, loss, n_triplets_list, tensorboard_writer, training=True):
         _ = dataset_embeddings
         _ = dataset_labels
         _ = query_embeddings
+        _ = query_predicted_logits
         _ = query_labels
         self.loss = loss
         _ = n_triplets_list
@@ -953,7 +954,12 @@ class AllMetrics(Metric):
         self.recall_aggregated = dict()
         self.precision_aggregated = dict()
         self.average_precision_aggregated = dict()
+        self.f1_scores = dict()
         self.label_vector_helper = LabelVectorHelper()
+
+        self.log_interval = 1
+        self.train_call_counter = 0
+        self.test_call_counter = 0
     
     def get_query_per_class_relevance(self, query, result):
         query = np.array(query)
@@ -1119,14 +1125,73 @@ class AllMetrics(Metric):
         ideal_dcg_at_k = np.array([ideal_relevances[i]/np.log2((i+1)+1) for i in range(max(k_top))])
         ndcg_at_k = {k_original: np.sum(dcg_at_k[:k])/max(1., np.sum(ideal_dcg_at_k[:k])) for k, k_original in zip(k_top, self.k)}
         return ndcg_at_k
+    
+    def compute_f1_scores(self, preds: np.ndarray, targets: np.ndarray):
+        """
+        Args:
+            preds: binary prediction matrix of shape [N, C]
+            targets: binary ground truth matrix of shape [N, C]
 
-    def __call__(self, epoch_number, dataset_embeddings, dataset_labels, query_embeddings, query_labels, loss, n_triplets_list, tensorboard_writer, training=True):
+        Returns:
+            dict with:
+                - micro_f1
+                - macro_f1
+                - weighted_micro_f1
+                - weighted_macro_f1
+                - per_class_micro_f1: {class_name: score}
+                - per_class_macro_f1: {class_name: score}
+        """
+        preds = (preds > 0).astype(int)
+        targets = (targets > 0).astype(int)
+
+        tp = (preds & targets).sum()
+        fp = (preds & ~targets).sum()
+        fn = (~preds & targets).sum()
+
+        micro_precision = tp / max(tp + fp, 1)
+        micro_recall = tp / max(tp + fn, 1)
+        micro_f1 = 2 * micro_precision * micro_recall / max(micro_precision + micro_recall, 1e-8)
+
+        tp_c = (preds & targets).sum(axis=0)
+        fp_c = (preds & ~targets).sum(axis=0)
+        fn_c = (~preds & targets).sum(axis=0)
+
+        precision_c = tp_c / np.maximum(tp_c + fp_c, 1)
+        recall_c = tp_c / np.maximum(tp_c + fn_c, 1)
+        f1_c = 2 * precision_c * recall_c / np.maximum(precision_c + recall_c, 1e-8)
+
+        support = tp_c + fn_c  # ground truth positives per class
+        total_support = np.maximum(support.sum(), 1)
+
+        weighted_f1_c = f1_c * support / total_support
+
+        # Build per-class dicts
+        per_class_micro_f1 = {cls: round(float(f1_c[i]), 4) for i, cls in enumerate(self.classes_list)}
+        per_class_macro_f1 = {cls: round(float(f1_c[i]), 4) for i, cls in enumerate(self.classes_list)}
+
+        return {
+            "micro_f1": round(float(micro_f1), 4),
+            "macro_f1": round(float(f1_c.mean()), 4),
+            "weighted_micro_f1": round(float((f1_c * support).sum() / total_support), 4),
+            "weighted_macro_f1": round(float((f1_c * support).sum() / total_support), 4),
+            "per_class_micro_f1": per_class_micro_f1,
+            "per_class_macro_f1": per_class_macro_f1
+        }
+
+
+    def __call__(self, epoch_number, dataset_embeddings, dataset_labels, query_embeddings, query_predicted_logits, query_labels, loss, n_triplets_list, tensorboard_writer, training=True):
         if training:
             mode_string = "[Training]"
+            self.train_call_counter += 1
         else:
             mode_string = "[Validation]"
+            self.test_call_counter += 1
         print(f'{mode_string} Call on Metric.AllMetrics')
         distances_matrix = query_dataset_dist(query_embeddings, dataset_embeddings)
+        if self.train_call_counter % self.log_interval == 0 or self.test_call_counter % self.log_interval == 0:
+            print('distances_matrix[0]:\n', distances_matrix[0])
+            print()
+            print('distances_matrix:\n', distances_matrix)
         sorted_distance_matrix, sorted_args = distances_matrix.sort(axis=-1) # sorted distances in increasing order
         if training:
             sorted_distance_matrix = sorted_distance_matrix[:, 1:].numpy() 
@@ -1143,9 +1208,12 @@ class AllMetrics(Metric):
         else:
             query_vectors = query_labels
             query_labels = [self.label_vector_helper.get_class_id(lbl.tolist()) for lbl in query_labels]
-        #first_results_args = sorted_args[:, 0]
-        #first_results_labels = np.array([dataset_labels[r] for r in first_results_args])
-        #first_results_vectors = np.array([self.proximity_vector_labels_dict[r.item()] for r in first_results_labels])
+        #sorted_results_args = sorted_args[:, 0]
+        #sorted_results_labels = np.array([dataset_labels[r] for r in sorted_results_args])
+        #if not hasattr(sorted_results_labels[0], 'shape'):
+        #    sorted_results_vectors = np.array([self.proximity_vector_labels_dict[int(r.item())] for r in sorted_results_labels])
+        #else:
+        #    sorted_results_vectors = np.array([self.proximity_vector_labels_dict[int(r)] for r in sorted_results_labels])
         for i, row in enumerate(sorted_args):
             #row = row.cpu().numpy().tolist()
             #print(f'{mode_string} Processing query {i+1}/{len(sorted_args)}')
@@ -1197,14 +1265,19 @@ class AllMetrics(Metric):
         else:
             log_name_prefix = 'validation'
         for metric_name in self.metric_value:
-            for k in self.metric_value[metric_name]:
-                composed_metric_name = f'{log_name_prefix}_{metric_name}@{k}'
-                tensorboard_writer.add_scalar(composed_metric_name, self.metric_value[metric_name][k], epoch_number)
+            if hasattr(self.metric_value[metric_name], '__iter__'):
+                for k in self.metric_value[metric_name]:
+                    composed_metric_name = f'{log_name_prefix}_{metric_name}@{k}'
+                    tensorboard_writer.add_scalar(composed_metric_name, self.metric_value[metric_name][k], epoch_number)
+            else:
+                composed_metric_name = f'{log_name_prefix}_{metric_name}'
+                tensorboard_writer.add_scalar(composed_metric_name, self.metric_value[metric_name], epoch_number)
         # for i, class_name in enumerate(self.classes_list):
         #     y_true = query_vectors[:, i]
         #     y_pred = first_results_vectors[:, i]
         #     composed_metric_name = f'{log_name_prefix}_PR_curve_{class_name}'
         #     tensorboard_writer.add_pr_curve(composed_metric_name, y_true, y_pred)
+        self.f1_scores = self.compute_f1_scores(preds=np.array(query_predicted_logits), targets=np.array(query_vectors))
         return self.metric_value
 
     def reset(self):
@@ -1432,9 +1505,11 @@ class AllMetrics(Metric):
                     [(f'mean_average_precision_{cname}', self.average_precision_per_class[cname]) for cname in self.average_precision_per_class]+
                     [(f'NDCG_{cname}', self.ndcg_per_class[cname]) for cname in self.ndcg_per_class]+
                     [(f'precision_{cname}', self.precision_per_class[cname]) for cname in self.precision_per_class]+
-                    [(f'recall_{cname}', self.recall_per_class[cname]) for cname in self.recall_per_class])
+                    [(f'recall_{cname}', self.recall_per_class[cname]) for cname in self.recall_per_class]+
+
+                    [(f1k, f1v) for (f1k, f1v) in self.f1_scores.items()])
     
         
 
     def name(self):
-        return f'mAP@k, NDCG@k, Precision@k & Recall@k (k={self.k})'
+        return f'Precision@k, Recall@k, F1@k, mAP@k, NDCG@k (k={self.k})'
