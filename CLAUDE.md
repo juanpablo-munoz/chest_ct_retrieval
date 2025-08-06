@@ -4,94 +4,149 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a research thesis project that implements a chest CT image retrieval system using triplet learning for medical image similarity. Its main features are:
+This is a research thesis project that implements a chest CT image retrieval system using both triplet learning and micro-F1 classification for medical image similarity. Its main features are:
 
-- **Triplet Learning**: Uses contrastive/triplet loss to learn embeddings for CT volume similarity
-- **3D CNN Architecture**: Proximity300x300 model combining ResNet18 features with 3D convolutions
-- **Medical Dataset**: Works with a dataset (DR2156) of chest CT scans paired with radiology reports and multi-class labels that distill medical anomalies of reports
-- **Embedding-based Retrieval**: Generates embeddings for similarity-based medical image retrieval
+- **Dual Training Modes**: Supports both triplet learning and micro-F1 classification approaches
+- **Adaptive 3D CNN Architecture**: Proximity100x100 model with automatic layer size calculation
+- **GPU-Optimized Pipeline**: Kornia-based augmentations and mixed precision training
+- **Medical Dataset**: Works with DR2156 chest CT scans with multi-class medical anomaly labels
+- **Advanced Evaluation**: Comprehensive metrics including F1-scores, mAP@k, and medical relevance scoring
 
 ## Core Architecture
 
 ### Main Components
 
-- **`datasets/`**: Dataset loading and preprocessing for CT volumes
-  - `ct_volume_dataset.py`: Main dataset class for preprocessed CT triplets
-  - `base.py`: Label vector utilities and pair/triplet construction helpers
-  - `constants.py`: Proximity vector labels and class definitions
-
 - **`models/networks.py`**: Neural network architectures
-  - `Proximity300x300`: Primary model combining ResNet18 + 3D CNN for CT volume processing
+  - `Proximity100x100`: Adaptive model with automatic flattened_size calculation and dual-task support (embedding/classification)
+  - `Proximity300x300`: Legacy model for 300x300 fixed inputs
+  - Built-in `get_embeddings()` method with mixed precision support
 
-- **`losses/losses.py`**: Loss functions for metric learning
-  - `TripletLoss`, `ContrastiveLoss`, `OnlineTripletLoss` implementations
+- **`training/`**: Dual training pipeline system
+  - `trainer_local_microf1.py`: Micro-F1 classification training with separate train_eval_loader for faster embedding extraction
+  - `data_setup_local.py`: GPU-optimized data loading with Kornia augmentations and memory-efficient preprocessing
+  - `model_setup_local.py`: Model initialization supporting both training modes
 
-- **`training/`**: Training pipeline and utilities
-  - `trainer.py`: Main training loop with metrics and checkpointing
-  - `data_setup.py`: Data loading and batch creation
-  - `model_setup.py`: Model, optimizer, and scheduler initialization
+- **`losses/losses_local.py`**: Enhanced loss functions
+  - `GradedMicroF1Loss`: Differentiable micro-F1 loss with sigmoid activations
+  - `OnlineTripletLoss`: Improved triplet mining with compatibility checks
 
-- **`eval/`**: Evaluation metrics (NDCG, recall, custom triplet metrics)
+- **`eval/metrics.py`**: Comprehensive evaluation system
+  - `AllMetrics`: Unified metric calculation (Precision@k, Recall@k, mAP@k, NDCG@k, F1-scores)
+  - Real-time TensorBoard logging with PR curves
+  - Medical relevance scoring using Jaccard similarity
 
-- **`utils/`**: Utility functions including distance metrics, selectors, and embedding tools
-
-- **`notebooks/`**: Jupyter notebooks in which experiments and development is done.
-  - `notebooks/ct_embeddings_resnet.ipynb`: DICOM data preprocessing experiments and pipeline
-  - `notebooks/Exp_1_TripletDR2156.ipynb`: Main training flow development
- Other notebook files contain different experiments that are not immidiately relevant but required for the final thesis report
+- **`datasets/`**: Enhanced data handling
+  - `ct_volume_dataset_local.py`: Optimized dataset classes with memory-efficient loading
+  - Support for stratified train/eval splits and uint8 volume storage
 
 ### Configuration System
 
-- **`config/base.yaml`**: Main configuration file defining:
-  - Model parameters (embedding_size: 128, margin: 0.2)
-  - Training settings (50 epochs, Adam optimizer, lr: 1e-5)
-  - Data paths and preprocessing settings
-  - Metrics and logging configuration
+- **`config/base_local.yaml`**: Micro-F1 training configuration
+  - Model: Proximity100x100 with 1024-dim embeddings
+  - Data: 270x270 preprocessed volumes (uint8 format)
+  - Training: Mixed precision with GPU augmentations
+  - `train_eval_frac`: Separate evaluation subset size (default: 0.1)
 
-- **`config/config.py`**: YAML configuration loader
+- **`config/base.yaml`**: Traditional triplet learning configuration
+  - Model: Proximity300x300 with balanced batch sampling
+  - Training: n_classes × n_samples batch structure
 
 ## Common Development Commands
 
-### Training
+### Training Commands
 
 ```bash
-# Main training script
-python main.py
+# Micro-F1 classification training (recommended)
+python main.py --mode microf1 --config config/base_local.yaml
+
+# Traditional triplet learning
+python main.py --mode triplet --config config/base.yaml
+
+# Disable GPU optimizations for debugging
+python main.py --mode microf1 --no-optimized-loaders
 ```
 
-### Key Training Parameters (config/base.yaml)
+### Key Training Parameters
 
-- `model.embedding_size`: Embedding dimension (default: 128)
-- `loss.margin`: Triplet loss margin (default: 0.2)
-- `training.n_epochs`: Training epochs (default: 50)
-- `training.batch.n_classes`: Classes per batch (default: 2)
-- `training.batch.n_samples`: Samples per class (default: 4)
-- `paths.dr2156.preprocessed_300`: Path to preprocessed CT data
+**Micro-F1 Mode (config/base_local.yaml):**
+- `model.embedding_size`: 1024 (high-dimensional embeddings)
+- `training.batch.batch_size`: 8 (simple batch structure)
+- `dataset.train_eval_frac`: 0.1 (subset for embedding extraction)
+- `paths.dr2156.preprocessed_270_uint8`: Memory-efficient uint8 volumes
 
-## Data Pipeline
+**Triplet Mode (config/base.yaml):**
+- `training.batch.n_classes`: 2 (classes per batch)
+- `training.batch.n_samples`: 3 (samples per class)
+- `loss.margin`: 0.2 (triplet loss margin)
 
-1. **Raw CT Data**: DICOM files in `data/DR2156/DR2156_DICOM/`
-2. **Preprocessed Volumes**: 300x300 preprocessed CT slices
-3. **Embeddings**: ResNet18-based embeddings for triplet construction
-4. **Triplet Dataset**: Anchor-positive-negative triplets for training
+## Data Pipeline Architecture
+
+### Micro-F1 Pipeline
+```
+Raw DICOM → 270x270x300 uint8 volumes → GPU Augmentation (Kornia) → 
+ResNet18 Features → 3D CNN Reduction → 1024-dim Embeddings → 
+Classification Head → Micro-F1 Loss
+```
+
+### GPU-Based Augmentation
+```python
+gpu_aug = K.AugmentationSequential(
+    K.RandomAffine3D(degrees=(5, 5, 5), scale=(0.95, 1.05), p=0.5),
+    RandomGaussianNoise3D(mean=0.0, std=0.01, p=0.5)
+).to("cuda")
+```
+
+## Advanced Training Features
+
+### Two-Phase Training (Micro-F1 Mode)
+1. **Training Phase**: Gradient updates on full training set with augmentations
+2. **Embedding Phase**: Fast embedding extraction on train_eval subset (no augmentations)
+
+### Memory Optimization
+- **Mixed Precision Training**: Automatic loss scaling with GradScaler
+- **Uint8 Volume Storage**: Reduced memory footprint for large datasets  
+- **Gradient Accumulation**: Effective larger batch sizes with limited GPU memory
+- **Separate Train-Eval Loader**: Faster metrics calculation during training
+
+### Model Architecture Innovations
+- **Automatic Layer Sizing**: Proximity100x100 calculates flattened_size based on input dimensions
+- **Dual-Task Support**: Single model handles both embedding and classification tasks
+- **Mixed Precision Methods**: Built-in autocast support in get_embeddings()
 
 ## Model Training Flow
 
-1. Load configuration from `config/base.yaml`
-2. Setup training environment and directories (`runs/`)
-3. Initialize dataset on the preprocessed volumes
-4. Create model (Proximity300x300) with embedding layers
-5. Setup triplet loss and optimizer
-6. Train with batch sampling (n_classes × n_samples per batch)
-7. Evaluate using NDCG, recall, and custom triplet metrics
-8. Save checkpoints and TensorBoard logs
+### Micro-F1 Mode
+1. Load configuration from `config/base_local.yaml`
+2. Create stratified train/train_eval/test splits with train_eval_frac
+3. Initialize Proximity100x100 model with classification head
+4. Setup GradedMicroF1Loss and mixed precision training
+5. Train with gradient accumulation and GPU augmentations
+6. Extract embeddings on train_eval subset for metrics
+7. Save checkpoints based on best micro-F1 or mAP@k scores
 
-## Important Notes
+### Advanced Checkpointing
+- **Metric-Based Selection**: Automatically saves best model based on micro-F1 > mAP@k priority
+- **Timestamped Checkpoints**: Format: `microf1_YYYYMMDD_epoch=XXX_metric=X.XXXX.pth`
+- **Final Checkpoint**: Guaranteed save at training completion
 
-- Model expects 5D input: `[batch_size, 300, 3, height, width]` (300 CT slices)
-- Uses mixed precision training with autocast
-- Implements online triplet mining during training
-- Supports both fixed test triplets and dynamic training triplets
-- Uses multi-class labels for medical relevance scoring during evaluation
-- This project is under development and is still not feature-complete
-- All development occurs inside Jupyter notebooks located in `notebooks/`
+## Important Implementation Notes
+
+- **Input Format**: Model expects `[batch_size, 300, 1, height, width]` with automatic resizing to 270x150x150
+- **Mixed Precision**: Essential for GPU memory management with large volumes
+- **Train-Eval Split**: Uses stratified subset of training data (not separate validation split)
+- **GPU Augmentations**: All data preprocessing happens on GPU for maximum efficiency
+- **Environment Setup**: Requires CUDA with multiprocessing spawn method for Windows compatibility
+- **Development Focus**: Primary development now occurs in main.py training loops rather than notebooks
+
+## Evaluation System
+
+### Comprehensive Metrics
+- **Retrieval Metrics**: Precision@k, Recall@k, mAP@k, NDCG@k for k=[1,3,5,10,20]
+- **Classification Metrics**: Micro/Macro/Weighted F1-scores for medical anomaly detection
+- **Medical Relevance**: Jaccard similarity scoring based on multi-class label vectors
+- **Per-Class Analysis**: Individual class performance tracking for medical anomalies
+
+### Real-Time Monitoring
+- **TensorBoard Integration**: Automatic logging of losses, metrics, and PR curves
+- **Progress Tracking**: TQDM progress bars with batch-level loss reporting
+- **Memory Monitoring**: CUDA memory debugging with environment variables

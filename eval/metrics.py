@@ -1265,19 +1265,38 @@ class AllMetrics(Metric):
         else:
             log_name_prefix = 'validation'
         for metric_name in self.metric_value:
-            if hasattr(self.metric_value[metric_name], '__iter__'):
-                for k in self.metric_value[metric_name]:
-                    composed_metric_name = f'{log_name_prefix}_{metric_name}@{k}'
-                    tensorboard_writer.add_scalar(composed_metric_name, self.metric_value[metric_name][k], epoch_number)
-            else:
-                composed_metric_name = f'{log_name_prefix}_{metric_name}'
-                tensorboard_writer.add_scalar(composed_metric_name, self.metric_value[metric_name], epoch_number)
+            # if hasattr(self.metric_value[metric_name], '__iter__'):
+            #     for k in self.metric_value[metric_name]:
+            #         composed_metric_name = f'{log_name_prefix}_{metric_name}@{k}'
+            #         tensorboard_writer.add_scalar(composed_metric_name, self.metric_value[metric_name][k], epoch_number)
+            # else:
+            #     composed_metric_name = f'{log_name_prefix}_{metric_name}'
+            #     tensorboard_writer.add_scalar(composed_metric_name, self.metric_value[metric_name], epoch_number)
+            for k in self.metric_value[metric_name]:
+                composed_metric_name = f'{log_name_prefix}_{metric_name}@{k}'
+                tensorboard_writer.add_scalar(composed_metric_name, self.metric_value[metric_name][k], epoch_number)
+
         # for i, class_name in enumerate(self.classes_list):
         #     y_true = query_vectors[:, i]
         #     y_pred = first_results_vectors[:, i]
         #     composed_metric_name = f'{log_name_prefix}_PR_curve_{class_name}'
         #     tensorboard_writer.add_pr_curve(composed_metric_name, y_true, y_pred)
         self.f1_scores = self.compute_f1_scores(preds=np.array(query_predicted_logits), targets=np.array(query_vectors))
+        for (f1k, f1v) in self.f1_scores.items():
+            self.metric_value[f1k] = f1v
+        
+        # Log F1 scores to TensorBoard
+        for f1_metric_name, f1_value in self.f1_scores.items():
+            if isinstance(f1_value, dict):
+                # Per-class F1 scores
+                for class_name, class_f1_value in f1_value.items():
+                    composed_metric_name = f'{log_name_prefix}_{f1_metric_name}_{class_name}'
+                    tensorboard_writer.add_scalar(composed_metric_name, class_f1_value, epoch_number)
+            else:
+                # Scalar F1 scores (micro_f1, macro_f1, etc.)
+                composed_metric_name = f'{log_name_prefix}_{f1_metric_name}'
+                tensorboard_writer.add_scalar(composed_metric_name, f1_value, epoch_number)
+        
         return self.metric_value
 
     def reset(self):
@@ -1505,9 +1524,7 @@ class AllMetrics(Metric):
                     [(f'mean_average_precision_{cname}', self.average_precision_per_class[cname]) for cname in self.average_precision_per_class]+
                     [(f'NDCG_{cname}', self.ndcg_per_class[cname]) for cname in self.ndcg_per_class]+
                     [(f'precision_{cname}', self.precision_per_class[cname]) for cname in self.precision_per_class]+
-                    [(f'recall_{cname}', self.recall_per_class[cname]) for cname in self.recall_per_class]+
-
-                    [(f1k, f1v) for (f1k, f1v) in self.f1_scores.items()])
+                    [(f'recall_{cname}', self.recall_per_class[cname]) for cname in self.recall_per_class])
     
         
 
