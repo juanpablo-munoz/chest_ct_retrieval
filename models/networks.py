@@ -19,7 +19,7 @@ class Proximity100x100(nn.Module):
         assert task in ["embedding", "classification"]
         self.task = task
         self.embedding_size = embedding_size
-        self.input_H, self.input_W = 150, 150
+        self.input_H, self.input_W = 270, 270
         self.updated_layer_sizes = False
         self.num_classes = num_classes
 

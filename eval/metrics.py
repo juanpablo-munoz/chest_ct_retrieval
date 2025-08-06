@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torcheval.metrics import BinaryPrecision, BinaryRecall, BinaryF1Score
 from sklearn.metrics import classification_report, ndcg_score, jaccard_score
-from utils.utils import pdist, query_dataset_dist
+from utils.utils import pdist, query_dataset_dist, query_dataset_sim_cosine
 from datasets.base import LabelVectorHelper
 
 
@@ -1187,12 +1187,15 @@ class AllMetrics(Metric):
             mode_string = "[Validation]"
             self.test_call_counter += 1
         print(f'{mode_string} Call on Metric.AllMetrics')
-        distances_matrix = query_dataset_dist(query_embeddings, dataset_embeddings)
+        distances_matrix = query_dataset_dist(query_embeddings, dataset_embeddings) # <-- Squared Euclidean distance (0.0 means identical data points)
+        #distances_matrix = query_dataset_sim_cosine(query_embeddings, dataset_embeddings) # <-- Cosine similarity!! (1.0 means identical data points)
         if self.train_call_counter % self.log_interval == 0 or self.test_call_counter % self.log_interval == 0:
             print('distances_matrix[0]:\n', distances_matrix[0])
             print()
             print('distances_matrix:\n', distances_matrix)
-        sorted_distance_matrix, sorted_args = distances_matrix.sort(axis=-1) # sorted distances in increasing order
+        sorted_distance_matrix, sorted_args = distances_matrix.sort(axis=-1) # sorted distances in increasing order for Squared Euclidean distance
+        #sorted_distance_matrix, sorted_args = distances_matrix.sort(dim=-1, descending=True) # sorted distances in decreasing order for Cosine similarity
+
         if training:
             sorted_distance_matrix = sorted_distance_matrix[:, 1:].numpy() 
             sorted_args = sorted_args[:, 1:].numpy() # remove first column because it is the self-distance (always zero) 
@@ -1208,6 +1211,10 @@ class AllMetrics(Metric):
         else:
             query_vectors = query_labels
             query_labels = [self.label_vector_helper.get_class_id(lbl.tolist()) for lbl in query_labels]
+        #print('query_predicted_logits.shape:', query_predicted_logits.shape)
+        #print('query_labels.shape:', query_labels.shape)
+        #print('query_predicted_logits:\n', query_predicted_logits)
+        #print('query_labels:\n', query_labels)
         #sorted_results_args = sorted_args[:, 0]
         #sorted_results_labels = np.array([dataset_labels[r] for r in sorted_results_args])
         #if not hasattr(sorted_results_labels[0], 'shape'):
@@ -1282,9 +1289,7 @@ class AllMetrics(Metric):
         #     composed_metric_name = f'{log_name_prefix}_PR_curve_{class_name}'
         #     tensorboard_writer.add_pr_curve(composed_metric_name, y_true, y_pred)
         self.f1_scores = self.compute_f1_scores(preds=np.array(query_predicted_logits), targets=np.array(query_vectors))
-        for (f1k, f1v) in self.f1_scores.items():
-            self.metric_value[f1k] = f1v
-        
+
         # Log F1 scores to TensorBoard
         for f1_metric_name, f1_value in self.f1_scores.items():
             if isinstance(f1_value, dict):
@@ -1354,9 +1359,9 @@ class AllMetrics(Metric):
                 recall_random[k_value] += recall_random_scores[k_value]
         for k_value in recall:
             recall[k_value] /= query_count
-            recall[k_value] = round(recall[k_value], 4)
+            recall[k_value] = float(round(recall[k_value], 4))
             recall_random[k_value] /= query_count
-            recall_random[k_value] = round(recall_random[k_value], 4)
+            recall_random[k_value] = float(round(recall_random[k_value], 4))
         self.recall = recall
         self.recall_random = recall_random
 
@@ -1371,9 +1376,9 @@ class AllMetrics(Metric):
                 precision_random[k_value] += precision_random_scores[k_value]
         for k_value in precision:
             precision[k_value] /= query_count
-            precision[k_value] = round(precision[k_value], 4)
+            precision[k_value] = float(round(precision[k_value], 4))
             precision_random[k_value] /= query_count
-            precision_random[k_value] = round(precision_random[k_value], 4)
+            precision_random[k_value] = float(round(precision_random[k_value], 4))
         self.precision = precision
         self.precision_random = precision_random
 
@@ -1388,9 +1393,9 @@ class AllMetrics(Metric):
                 mean_average_precision_random[k_value] += mean_average_precision_random_scores[k_value]
         for k_value in mean_average_precision:
             mean_average_precision[k_value] /= query_count
-            mean_average_precision[k_value] = round(mean_average_precision[k_value], 4)
+            mean_average_precision[k_value] = float(round(mean_average_precision[k_value], 4))
             mean_average_precision_random[k_value] /= query_count
-            mean_average_precision_random[k_value] = round(mean_average_precision_random[k_value], 4)
+            mean_average_precision_random[k_value] = float(round(mean_average_precision_random[k_value], 4))
         self.mean_average_precision = mean_average_precision
         self.mean_average_precision_random = mean_average_precision_random
 
@@ -1405,9 +1410,9 @@ class AllMetrics(Metric):
                 ndcg_random[k_value] += ndcg_random_scores[k_value]
         for k_value in ndcg:
             ndcg[k_value] /= query_count
-            ndcg[k_value] = round(ndcg[k_value], 4)
+            ndcg[k_value] = float(round(ndcg[k_value], 4))
             ndcg_random[k_value] /= query_count
-            ndcg_random[k_value] = round(ndcg_random[k_value], 4)
+            ndcg_random[k_value] = float(round(ndcg_random[k_value], 4))
         self.ndcg = ndcg
         self.ndcg_random = ndcg_random
 

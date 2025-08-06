@@ -25,46 +25,40 @@ gpu_aug = K.AugmentationSequential(
     data_keys=["input"]
 ).to("cuda")
 
-def make_collate_tensor_batch(apply_gpu_aug: bool = False):
-    def collate_fn(batch):
-        samples = []
-        transposed_target = []
+def collate_tensor_batch(batch, apply_gpu_aug=False):
+    samples = []
+    transposed_target = []
 
-        for sample, target in batch:
-            samples.append(sample)
-            transposed_target.append(target)
+    for sample, target in batch:
+        samples.append(sample)
+        transposed_target.append(target)
 
-        samples = torch.tensor(np.array(samples))  # shape: [B, D, 1, H, W]
-        transposed_target = torch.tensor(transposed_target)
+    samples = torch.tensor(np.array(samples))  # [B, D, 1, H, W]
+    transposed_target = torch.tensor(transposed_target)
 
-        samples = samples.to("cuda")
-        transposed_target = transposed_target.to("cuda")
+    samples = samples.permute(0, 2, 1, 3, 4)  # → [B, 1, D, H, W]
+    # samples = F.interpolate(
+    #     samples,
+    #     size=[ct_depth, ct_resize_H, ct_resize_W],
+    #     mode='trilinear',
+    #     align_corners=False
+    # )
 
-        # Convert to shape [B, C=1, D, H, W]
-        samples = samples.permute(0, 2, 1, 3, 4)
+    # Don't use GPU transforms here if num_workers > 0
+    if apply_gpu_aug:
+        raise RuntimeError("Cannot apply GPU transforms in collate_fn with num_workers > 0")
 
-        # Resize H and W
-        samples = F.interpolate(
-            samples,
-            size=[ct_depth, ct_resize_H, ct_resize_W],
-            mode='trilinear',
-            align_corners=False
-        )
+    samples = samples.permute(0, 2, 1, 3, 4)  # → [B, D, 1, H, W]
+    samples = (samples - 0.449) / 0.226
 
-        # Visual augmentations (on GPU) if needed
-        if apply_gpu_aug:
-            samples = gpu_aug(samples)
+    return samples, transposed_target
 
-        # Back to initial shape [B, D, 1, H, W]
-        samples = samples.permute(0, 2, 1, 3, 4)
+class CollateFn:
+    def __init__(self, apply_gpu_aug=False):
+        self.apply_gpu_aug = apply_gpu_aug
 
-        # Normalize
-        samples = (samples - 0.449) / 0.226
-
-        return samples, transposed_target
-
-    return collate_fn
-
+    def __call__(self, batch):
+        return collate_tensor_batch(batch, apply_gpu_aug=self.apply_gpu_aug)
 
 def collate_tensor_batch_vector_labels(batch):
     label_vector_helper = LabelVectorHelper()
@@ -147,19 +141,19 @@ def create_loaders(train_set, test_set, n_classes, n_samples, cuda):
     batch_size = n_classes * n_samples
 
     return {
-        "train_eval": DataLoader(train_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
-        "test_eval": DataLoader(test_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
-        "train_triplet": DataLoader(train_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=True), batch_sampler=sampler_train, **kwargs),
-        "test_triplet": DataLoader(test_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=False), batch_sampler=sampler_test, **kwargs),
+        "train_eval": DataLoader(train_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
+        "test_eval": DataLoader(test_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
+        "train_triplet": DataLoader(train_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_sampler=sampler_train, **kwargs),
+        "test_triplet": DataLoader(test_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_sampler=sampler_test, **kwargs),
         "all_triplet_train": TripletDataLoader(train_set, n_classes=n_classes, n_samples=n_samples, **kwargs),
         "all_triplet_test": TripletDataLoader(test_set, n_classes=n_classes, n_samples=n_samples, **kwargs),
     }
 
 def create_loaders_microf1(train_set, train_eval_set, test_set, batch_size, cuda):
-    kwargs = {'num_workers': 0, 'prefetch_factor': None, 'persistent_workers': False, 'pin_memory': False} if cuda else {}
+    kwargs = {'num_workers': 4, 'prefetch_factor': 1, 'persistent_workers': True, 'pin_memory': True} if cuda else {}
 
     return {
-        "train": DataLoader(train_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=True), batch_size=batch_size, **kwargs),
-        "train_eval": DataLoader(train_eval_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
-        "test": DataLoader(test_set, collate_fn=make_collate_tensor_batch(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
+        "train": DataLoader(train_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_size=batch_size, **kwargs),
+        "train_eval": DataLoader(train_eval_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
+        "test": DataLoader(test_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
     }
