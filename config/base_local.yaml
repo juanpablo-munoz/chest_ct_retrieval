@@ -12,12 +12,12 @@ loss:
 
 training:
   seed: 0
-  n_epochs: 50
+  n_epochs: 100
   augmentations: True
   batch:
     n_classes: 2
     n_samples: 3
-    batch_size: 8
+    batch_size: 24
   optimizer:
     type: adam
     lr: 1e-5
@@ -35,21 +35,21 @@ training:
   train_full_loader_switch: False
 
 paths:
-  user_home: E:\\files\Documents\\Proyecto Proximity\\
-  base_data: \\dataChivo\\batch_01\\bigdata_02\\datareleases
-  project_root: E:\\files\Documents\\Proyecto Proximity\\chest_ct_retrieval
+  user_home: E:/files\Documents/Proyecto Proximity/
+  base_data: /dataChivo/batch_01/bigdata_02/datareleases
+  project_root: E:/files/Documents/Proyecto Proximity/chest_ct_retrieval
 
   dr2156:
     datarelease: DR2156
     ct: DR2156_studies
-    labels: DR2156_labels\\DR2156_labels.csv
-    preprocessed_270_uint8: data\\DR2156\\DR2156_270_preprocessed_uint8
-    preprocessed_300: data\\DR2156\\DR2156_300_preprocessed
-    preprocessed_300_int8: data\\DR2156\\DR2156_300_preprocessed_int8
-    preprocessed_300_zarr: data\\DR2156\\DR2156_300_preprocessed_zarr
-    preprocessed_512: data\\DR2156\\DR2156_512_preprocessed
-    embeddings_300: data\\DR2156\\DR2156_300_resnet18_embeddings
-    embeddings_512: data\\DR2156\\DR2156_512_resnet18_embeddings
+    labels: DR2156_labels/DR2156_labels.csv
+    preprocessed_270_uint8: data/DR2156/DR2156_270_preprocessed_uint8
+    preprocessed_300: data/DR2156/DR2156_300_preprocessed
+    preprocessed_300_int8: data/DR2156/DR2156_300_preprocessed_int8
+    preprocessed_300_zarr: data/DR2156/DR2156_300_preprocessed_zarr
+    preprocessed_512: data/DR2156/DR2156_512_preprocessed
+    embeddings_300: data/DR2156/DR2156_300_resnet18_embeddings
+    embeddings_512: data/DR2156/DR2156_512_resnet18_embeddings
     triplet_runs: runs
     microf1_runs: runs_microf1
 

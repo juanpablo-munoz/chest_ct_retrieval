@@ -10,6 +10,10 @@ from datetime import datetime
 import torch.nn.functional as F
 from losses.losses_local import GradedMicroF1Loss
 
+import kornia.augmentation as K
+import torch.nn.functional as F
+from utils.transforms import RandomGaussianNoise3D
+
 class Trainer:
     def __init__(self, train_loader, train_eval_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, metrics=[], start_epoch=0, accumulation_steps=1) -> None:
         self.last_train_loss = np.inf
@@ -36,6 +40,21 @@ class Trainer:
         self.tensorboard_writer.add_hparams
         self.use_amp = self.cuda
         self.scaler = GradScaler(enabled=self.use_amp)
+
+        self.ct_depth = 300
+        self.ct_resize_H = 270
+        self.ct_resize_W = 270
+
+        self.apply_gpu_aug = True
+
+        self.gpu_aug = K.AugmentationSequential(
+            K.RandomAffine3D(degrees=(5, 5, 5), scale=(0.95, 1.05), p=0.5),
+            RandomGaussianNoise3D(mean=0.0, std=0.01, p=0.5),
+            data_keys=["input"]
+        ).to("cuda")
+
+        
+
         #self.tensorboard_writer.add_graph(self.model)
         for epoch in range(0, self.start_epoch):
             scheduler.step()
@@ -161,6 +180,16 @@ class Trainer:
                     target = target.cuda()
 
             with autocast('cuda', enabled=self.use_amp):
+
+                # shape: [B, D, 1, H, W] → [B, 1, D, H, W]
+                data = data.permute(0, 2, 1, 3, 4)
+
+                if self.apply_gpu_aug:
+                    data = self.gpu_aug(data)
+
+                # Back to [B, D, 1, H, W] if needed downstream
+                data = data.permute(0, 2, 1, 3, 4)
+
                 # Get model outputs (logits for classification task)
                 outputs = self.model(data)
                 

@@ -64,6 +64,11 @@ def psim_cosine(vectors):
     similarity_matrix = cos_sim(vectors[None,:,:], vectors[:,None,:], dim=-1)
     return similarity_matrix
 
+def query_dataset_sim_cosine(query_tensor, dataset_tensor):
+    cos_sim = torch.nn.functional.cosine_similarity
+    similarity_matrix = cos_sim(query_tensor[None,:,:], dataset_tensor[:,None,:], dim=-1)
+    return similarity_matrix
+
 def pdist_dot(vectors):
     distance_matrix = torch.bmm(vectors[None,:,:], vectors[:,None,:].permute(1, 2, 0))
     return distance_matrix
