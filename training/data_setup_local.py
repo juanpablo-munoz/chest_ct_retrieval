@@ -49,6 +49,7 @@ def collate_tensor_batch(batch, apply_gpu_aug=False):
         raise RuntimeError("Cannot apply GPU transforms in collate_fn with num_workers > 0")
 
     samples = samples.permute(0, 2, 1, 3, 4)  # → [B, D, 1, H, W]
+    samples /= 255.0
     samples = (samples - 0.449) / 0.226
 
     return samples, transposed_target

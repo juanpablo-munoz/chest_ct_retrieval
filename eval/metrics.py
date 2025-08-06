@@ -937,9 +937,17 @@ class AllMetrics(Metric):
         self.recall_scores = []
         self.per_class_recall_scores = []
         self.recall_scores_random = []
+        self.per_class_recall_scores_random = []
         self.precision_scores = []
         self.per_class_precision_scores = []
         self.precision_scores_random = []
+        self.per_class_precision_scores_random = []
+        self.f1_scores= []
+        self.f1_scores_random = []
+        self.per_class_f1_scores = []
+        self.per_class_f1_scores_random = []
+        self.macro_f1_scores = []
+        self.macro_f1_scores_random = []
         self.mean_average_precision_scores = []
         self.per_class_mean_average_precision_scores = []
         self.mean_average_precision_scores_random = []
@@ -954,7 +962,7 @@ class AllMetrics(Metric):
         self.recall_aggregated = dict()
         self.precision_aggregated = dict()
         self.average_precision_aggregated = dict()
-        self.f1_scores = dict()
+        #self.f1_scores = dict()
         self.label_vector_helper = LabelVectorHelper()
 
         self.log_interval = 1
@@ -1099,12 +1107,45 @@ class AllMetrics(Metric):
         return per_class_recall
 
     def calculate_recall(self, relevances):
-        total_relevants = np.sum(relevances, axis=-1)
+        sorted_relevants = -np.sort(-1 * relevances)
+        last_relevant_idx = np.where(sorted_relevants > 0.0)[0][-1]
+        n_relevants = last_relevant_idx + 1
+        #total_relevants = np.sum(relevances, axis=-1)
         relevances = np.array(relevances)
-        k_top = [min(k, len(relevances)) for k in self.k]
-        recall = {k_original: np.sum(relevances[:k])/max(1, total_relevants) for k, k_original in zip(k_top, self.k)}
+        #k_top = [min(k, len(relevances)) for k in self.k]
+        k_top = [min(k, len(relevances), n_relevants) for k in self.k]
+        recall = {k_original: np.sum(relevances[:k])/max(1, np.sum(sorted_relevants[:k])) for k, k_original in zip(k_top, self.k)}
         return recall
     
+    def calculate_f1(self, precision_at_k, recall_at_k):
+        f1_at_k = dict()
+        for k in self.k:
+            p = precision_at_k[k]
+            r = recall_at_k[k]
+            f1_at_k[k] = (2 * p * r) / (p + r + 1e-7)
+        return f1_at_k
+
+    def calculate_per_class_f1(self, per_class_precision_at_k, per_class_recall_at_k):
+        per_class_f1_at_k = dict()
+        for c in per_class_precision_at_k:
+            per_class_f1_at_k[c] = dict()
+            for k in per_class_precision_at_k[c]:
+                p = per_class_precision_at_k[c][k]
+                r = per_class_recall_at_k[c][k]
+                per_class_f1_at_k[c][k] = (2 * p * r) / (p + r + 1e-7)
+        return per_class_f1_at_k
+
+    def calculate_macro_f1(self, per_class_f1_at_k):
+        macro_f1_at_k = dict()
+        c_list = list(per_class_f1_at_k.keys())
+        k_list = list(per_class_f1_at_k[c_list[0]].values())
+        for k in k_list:
+            f1_values_list = []
+            for c in c_list:
+                f1_values_list.append(per_class_f1_at_k[c][k])
+            macro_f1_at_k[c] = np.mean(f1_values_list)
+        return macro_f1_at_k
+
     def calculate_per_class_ndcg(self, query_label, relevances, ideal_relevances):
         k_top = [min(k, len(relevances)) for k in self.k]
         query_vector = self.proximity_vector_labels_dict[query_label]
@@ -1232,12 +1273,14 @@ class AllMetrics(Metric):
             results_labels = [dataset_labels[i] for i in row]
             #print(f'{mode_string} Getting results_vector_list...')
             results_vector_list = [self.proximity_vector_labels_dict[r] for r in results_labels]
+            results_vector_list_random = self.rng.choice(results_vector_list, size=len(results_vector_list), replace=False)
             #print(f'{mode_string} Getting per_class_relevance_scores...')
             per_class_relevance_scores = self.per_class_relevance_metric(current_query_vector, results_vector_list)
+            per_class_relevance_scores_random = self.per_class_relevance_metric(current_query_vector, results_vector_list_random)
             #print(f'{mode_string} Getting relevance_scores...')
             relevance_scores = self.relevance_metric(current_query_vector, results_vector_list)
             #print(f'{mode_string} Getting relevance_scores_random...')
-            relevance_scores_random = self.rng.choice(relevance_scores, size=len(relevance_scores), replace=False)
+            relevance_scores_random = self.relevance_metric(current_query_vector, results_vector_list_random)
             #print(f'{mode_string} Getting results_ideal_scores_order...')
             results_ideal_scores_order = sorted(row, key=lambda v: self.relevance_orders[current_query_label].index(dataset_labels[v]))
             #print(f'{mode_string} Getting results_ideal_scores_labels...')
@@ -1250,12 +1293,24 @@ class AllMetrics(Metric):
             per_class_ideal_relevance_scores = self.per_class_relevance_metric(current_query_vector, results_ideal_scores_vectors)
             #print(f'{mode_string} Calculating recall_scores')
             self.per_class_recall_scores.append(self.calculate_per_class_recall(current_query_vector, per_class_relevance_scores))
+            self.per_class_recall_scores_random.append(self.calculate_per_class_recall(current_query_vector, per_class_relevance_scores_random))
             self.recall_scores.append(self.calculate_recall(relevance_scores))
             self.recall_scores_random.append(self.calculate_recall(relevance_scores_random))
             #print(f'{mode_string} Calculating precision_scores')
             self.per_class_precision_scores.append(self.calculate_per_class_precision(current_query_vector, per_class_relevance_scores))
+            self.per_class_precision_scores_random.append(self.calculate_per_class_precision(current_query_vector, per_class_relevance_scores_random))
             self.precision_scores.append(self.calculate_precision(relevance_scores))
             self.precision_scores_random.append(self.calculate_precision(relevance_scores_random))
+            #print(f'{mode_string} Calculating micro_f1_scores')
+            # IMPORTANT: Micro F1 scores MUST be calculated after precision and recall in this scope!
+            self.per_class_f1_scores.append(self.calculate_per_class_f1(self.per_class_precision_scores[-1], self.per_class_recall_scores[-1]))
+            self.f1_scores.append(self.calculate_f1(self.precision_scores[-1], self.recall_scores[-1]))
+            self.f1_scores_random.append(self.calculate_f1(self.precision_scores_random[1], self.recall_scores_random[-1]))
+            self.per_class_f1_scores_random.append(self.calculate_per_class_f1(self.per_class_precision_scores_random[-1], self.per_class_recall_scores_random[-1]))
+            #print(f'{mode_string} Calculating macro_f1_scores')
+            # IMPORTANT: Macro F1 scores MUST be calculated Micro F1 scores in this scope!
+            self.macro_f1_scores.append(self.calculate_macro_f1(self.per_class_f1_scores[-1]))
+            self.macro_f1_scores_random.append(self.calculate_macro_f1(self.f1_scores_random[-1]))
             #print(f'{mode_string} Calculating average_precision_scores')
             self.per_class_mean_average_precision_scores.append(self.calculate_per_class_average_precision(current_query_vector, per_class_relevance_scores))
             self.mean_average_precision_scores.append(self.calculate_average_precision(relevance_scores))
@@ -1303,6 +1358,15 @@ class AllMetrics(Metric):
     def reset(self):
 
         self.metric_value = None
+
+        self.per_class_recall_scores_random = []
+        self.per_class_precision_scores_random = []
+        self.f1_scores = []
+        self.f1_scores_random = []
+        self.per_class_f1_scores_random = []
+        self.per_class_f1_scores = []
+        self.macro_f1_scores = []
+        self.macro_f1_scores_random = []
 
         self.recall_scores = []
         self.precision_scores = []
@@ -1378,6 +1442,40 @@ class AllMetrics(Metric):
         self.precision = precision
         self.precision_random = precision_random
 
+        # f1
+        f1 = {k: 0.0 for k in self.k}
+        f1_random = {k: 0.0 for k in self.k}
+        query_count = 0
+        for f1_scores, f1_random_score in zip(self.f1_scores, self.f1_scores_random):
+            query_count += 1
+            for k_value in f1_scores:
+                f1[k_value] += f1_scores[k_value]
+                f1_random[k_value] += f1_random_score[k_value]
+        for k_value in f1:
+            f1[k_value] /= query_count
+            f1[k_value] = float(round(f1[k_value], 4))
+            f1_random[k_value] /= query_count
+            f1_random[k_value] = float(round(f1_random[k_value], 4))
+        self.f1 = f1
+        self.f1_random = f1_random
+
+        # macro-f1
+        macro_f1 = {k: 0.0 for k in self.k}
+        macro_f1_random = {k: 0.0 for k in self.k}
+        query_count = 0
+        for macro_f1_scores, macro_f1_random_score in zip(self.macro_f1_scores, self.macro_f1_scores_random):
+            query_count += 1
+            for k_value in macro_f1_scores:
+                macro_f1[k_value] += macro_f1_scores[k_value]
+                macro_f1_random[k_value] += macro_f1_random_score[k_value]
+        for k_value in macro_f1:
+            macro_f1[k_value] /= query_count
+            macro_f1[k_value] = float(round(macro_f1[k_value], 4))
+            macro_f1_random[k_value] /= query_count
+            macro_f1_random[k_value] = float(round(macro_f1_random[k_value], 4))
+        self.macro_f1 = macro_f1
+        self.macro_f1_random = macro_f1_random
+
         #print(f'{mode_string} Accumulating per query and randomized mAP scores')
         mean_average_precision = {k: 0.0 for k in self.k}
         mean_average_precision_random = {k: 0.0 for k in self.k}
@@ -1416,23 +1514,26 @@ class AllMetrics(Metric):
         average_precision_class_query_count = dict()
         recall_class_query_count = dict()
         ndcg_class_query_count = dict()
+        f1_class_query_count = dict()
 
         precision_per_class = dict()
         average_precision_per_class = dict()
         recall_per_class = dict()
         ndcg_per_class = dict()
+        f1_per_class = dict()
 
         
         precision_aggregated = dict()
         average_precision_aggregated = dict()
         recall_aggregated = dict()
         ndcg_aggregated = dict()
+        f1_aggregated = dict()
 
         total_queries = 0
 
         #print(f'{mode_string} Metric.AllMetrics.value(): Accumulating scores')
-        for precision_score, average_precision_score, recall_score, ndcg_score in zip(self.per_class_precision_scores, self.per_class_mean_average_precision_scores, self.per_class_recall_scores, self.per_class_ndcg_scores):
-            for precision_class_name, average_precision_class_name, recall_class_name, ndcg_class_name in zip(precision_score, average_precision_score, recall_score, ndcg_score):
+        for precision_score, average_precision_score, recall_score, ndcg_score, f1_score in zip(self.per_class_precision_scores, self.per_class_mean_average_precision_scores, self.per_class_recall_scores, self.per_class_ndcg_scores, self.per_class_f1_scores):
+            for precision_class_name, average_precision_class_name, recall_class_name, ndcg_class_name, f1_class_name in zip(precision_score, average_precision_score, recall_score, ndcg_score, f1_score):
                 if precision_class_name not in precision_per_class:
                     precision_per_class[precision_class_name] = {k: 0.0 for k in self.k}
                 if average_precision_class_name not in average_precision_per_class:
@@ -1441,6 +1542,8 @@ class AllMetrics(Metric):
                     recall_per_class[recall_class_name] = {k: 0.0 for k in self.k}
                 if ndcg_class_name not in ndcg_per_class:
                     ndcg_per_class[ndcg_class_name] = {k: 0.0 for k in self.k}
+                if f1_class_name not in f1_per_class:
+                    f1_per_class[f1_class_name] = {k: 0.0 for k in self.k}
 
                 if precision_class_name not in precision_class_query_count:
                     precision_class_query_count[precision_class_name] = 0
@@ -1450,22 +1553,26 @@ class AllMetrics(Metric):
                     recall_class_query_count[recall_class_name] = 0
                 if ndcg_class_name not in ndcg_class_query_count:
                     ndcg_class_query_count[ndcg_class_name] = 0
+                if f1_class_name not in f1_class_query_count:
+                    f1_class_query_count[f1_class_name] = 0
 
                 precision_class_query_count[precision_class_name] += 1
                 average_precision_class_query_count[average_precision_class_name] += 1
                 recall_class_query_count[recall_class_name] += 1
                 ndcg_class_query_count[ndcg_class_name] += 1
+                f1_class_query_count[f1_class_name] += 1
                 total_queries += 1
 
-                for precision_k_value, average_precision_k_value, recall_k_value, ndcg_k_value in zip(precision_score[precision_class_name], average_precision_score[average_precision_class_name], recall_score[recall_class_name], ndcg_score[ndcg_class_name]):
+                for precision_k_value, average_precision_k_value, recall_k_value, ndcg_k_value, f1_k_value in zip(precision_score[precision_class_name], average_precision_score[average_precision_class_name], recall_score[recall_class_name], ndcg_score[ndcg_class_name], f1_score[f1_class_name]):
                     precision_per_class[precision_class_name][precision_k_value] += precision_score[precision_class_name][precision_k_value]
                     average_precision_per_class[average_precision_class_name][average_precision_k_value] += average_precision_score[average_precision_class_name][average_precision_k_value]
                     recall_per_class[recall_class_name][recall_k_value] += recall_score[recall_class_name][recall_k_value]
                     ndcg_per_class[ndcg_class_name][ndcg_k_value] += ndcg_score[ndcg_class_name][ndcg_k_value]
+                    f1_per_class[f1_class_name][f1_k_value] += f1_score[f1_class_name][f1_k_value]
         
         #print(f'{mode_string} Metric.AllMetrics.value(): Averaging scores')
-        for precision_class_name, average_precision_class_name, recall_class_name, ndcg_class_name in zip(precision_per_class, average_precision_per_class, recall_per_class, ndcg_per_class):
-            for precision_k_value, average_precision_k_value, recall_k_value, ndcg_k_value in zip(precision_per_class[precision_class_name], average_precision_per_class[average_precision_class_name], recall_per_class[recall_class_name], ndcg_per_class[ndcg_class_name]):
+        for precision_class_name, average_precision_class_name, recall_class_name, ndcg_class_name, f1_class_name in zip(precision_per_class, average_precision_per_class, recall_per_class, ndcg_per_class, f1_per_class):
+            for precision_k_value, average_precision_k_value, recall_k_value, ndcg_k_value, f1_k_value in zip(precision_per_class[precision_class_name], average_precision_per_class[average_precision_class_name], recall_per_class[recall_class_name], ndcg_per_class[ndcg_class_name], f1_per_class[f1_class_name]):
                 
                 precision_per_class[precision_class_name][precision_k_value] /= precision_class_query_count[precision_class_name]
                 if precision_k_value not in precision_aggregated:
@@ -1489,6 +1596,12 @@ class AllMetrics(Metric):
                 if ndcg_k_value not in ndcg_aggregated:
                     ndcg_aggregated[ndcg_k_value] = 0.0
                 ndcg_aggregated[ndcg_k_value] += ndcg_per_class[ndcg_class_name][ndcg_k_value] * (ndcg_class_query_count[ndcg_class_name]/total_queries)
+                ndcg_per_class[ndcg_class_name][ndcg_k_value] = float(round(ndcg_per_class[ndcg_class_name][ndcg_k_value], 4))
+
+                f1_per_class[f1_class_name][f1_k_value] /= f1_class_query_count[f1_class_name]
+                if f1_k_value not in f1_aggregated:
+                    f1_aggregated[f1_k_value] = 0.0
+                f1_aggregated[ndcg_k_value] += f1_per_class[f1_class_name][f1_k_value] * (ndcg_class_query_count[ndcg_class_name]/total_queries)
                 ndcg_per_class[ndcg_class_name][ndcg_k_value] = float(round(ndcg_per_class[ndcg_class_name][ndcg_k_value], 4))
         
         precision_aggregated = {k: float(round(v, 4)) for k, v in precision_aggregated.items()}
