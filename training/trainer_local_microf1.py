@@ -41,10 +41,6 @@ class Trainer:
         self.use_amp = self.cuda
         self.scaler = GradScaler(enabled=self.use_amp)
 
-        self.ct_depth = 300
-        self.ct_resize_H = 270
-        self.ct_resize_W = 270
-
         self.apply_gpu_aug = True
 
         self.gpu_aug = K.AugmentationSequential(
@@ -52,8 +48,6 @@ class Trainer:
             RandomGaussianNoise3D(mean=0.0, std=0.01, p=0.5),
             data_keys=["input"]
         ).to("cuda")
-
-        
 
         #self.tensorboard_writer.add_graph(self.model)
         for epoch in range(0, self.start_epoch):
@@ -101,7 +95,7 @@ class Trainer:
                 if "mAP@k" in metric.name():
                     k = 10
                     self.val_map_at_k.append(metric.value()['mean_average_precision'][k])
-                elif metric.name() == "Micro-F1":
+                if metric.name() == "f1":
                     self.val_micro_f1.append(metric.value())
                     
                 print(message)
@@ -113,8 +107,9 @@ class Trainer:
             if self.val_micro_f1 and self.val_micro_f1[-1] == max(self.val_micro_f1):
                 best_metric_reached = True
                 self.best_val_loss = val_loss
+                k = 10
                 print(f"Best validation micro-F1 reached! micro-F1={self.val_micro_f1[-1]:.4f}. Saving model checkpoint...")
-                metric_str = f"micro-f1={self.val_micro_f1[-1]:.4f}"
+                metric_str = f"micro-f1@{k}={self.val_micro_f1[-1]:.4f}"
                 timestamp = datetime.now().strftime('%Y%m%d')
                 epoch_str = "epoch={:03d}".format(self.current_epoch)
                 torch.save(
@@ -186,6 +181,13 @@ class Trainer:
 
                 if self.apply_gpu_aug:
                     data = self.gpu_aug(data)
+                    
+                data = F.interpolate(
+                    data,
+                    size=[data.size()[-3], self.model.input_H, self.model.input_W],
+                    mode='trilinear',
+                    align_corners=False
+                )
 
                 # Back to [B, D, 1, H, W] if needed downstream
                 data = data.permute(0, 2, 1, 3, 4)
@@ -247,6 +249,20 @@ class Trainer:
                 
                 # Extract embeddings using the model's get_embeddings method with autocast
                 with autocast('cuda', enabled=self.use_amp):
+
+                    # shape: [B, D, 1, H, W] → [B, 1, D, H, W]
+                    data = data.permute(0, 2, 1, 3, 4)
+                        
+                    data = F.interpolate(
+                        data,
+                        size=[data.size()[-3], self.model.input_H, self.model.input_W],
+                        mode='trilinear',
+                        align_corners=False
+                    )
+
+                    # Back to [B, D, 1, H, W] if needed downstream
+                    data = data.permute(0, 2, 1, 3, 4)
+
                     embeddings = self.model.get_embeddings(data, use_autocast=True)
                 
                 all_embeddings.append(embeddings.cpu())
@@ -320,6 +336,20 @@ class Trainer:
                         target = target.cuda()
                 
                 with autocast('cuda', enabled=self.use_amp):
+
+                    # shape: [B, D, 1, H, W] → [B, 1, D, H, W]
+                    data = data.permute(0, 2, 1, 3, 4)
+                        
+                    data = F.interpolate(
+                        data,
+                        size=[data.size()[-3], self.model.input_H, self.model.input_W],
+                        mode='trilinear',
+                        align_corners=False
+                    )
+
+                    # Back to [B, D, 1, H, W] if needed downstream
+                    data = data.permute(0, 2, 1, 3, 4)
+                    
                     # Extract embeddings using the model's get_embeddings method
                     embeddings = self.model.get_embeddings(data, use_autocast=True)
                     

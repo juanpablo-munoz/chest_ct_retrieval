@@ -49,6 +49,7 @@ def collate_tensor_batch(batch, apply_gpu_aug=False):
         raise RuntimeError("Cannot apply GPU transforms in collate_fn with num_workers > 0")
 
     samples = samples.permute(0, 2, 1, 3, 4)  # → [B, D, 1, H, W]
+    samples /= 255.0
     samples = (samples - 0.449) / 0.226
 
     return samples, transposed_target
@@ -150,7 +151,7 @@ def create_loaders(train_set, test_set, n_classes, n_samples, cuda):
     }
 
 def create_loaders_microf1(train_set, train_eval_set, test_set, batch_size, cuda):
-    kwargs = {'num_workers': 4, 'prefetch_factor': 1, 'persistent_workers': True, 'pin_memory': True} if cuda else {}
+    kwargs = {'num_workers': 2, 'prefetch_factor': 1, 'persistent_workers': True, 'pin_memory': True} if cuda else {}
 
     return {
         "train": DataLoader(train_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_size=batch_size, **kwargs),
