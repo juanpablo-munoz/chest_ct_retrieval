@@ -1350,16 +1350,22 @@ class AllMetrics(Metric):
         else:
             log_name_prefix = 'validation'
         for metric_name in self.metric_value:
-            # if hasattr(self.metric_value[metric_name], '__iter__'):
-            #     for k in self.metric_value[metric_name]:
-            #         composed_metric_name = f'{log_name_prefix}_{metric_name}@{k}'
-            #         tensorboard_writer.add_scalar(composed_metric_name, self.metric_value[metric_name][k], epoch_number)
-            # else:
-            #     composed_metric_name = f'{log_name_prefix}_{metric_name}'
-            #     tensorboard_writer.add_scalar(composed_metric_name, self.metric_value[metric_name], epoch_number)
-            for k in self.metric_value[metric_name]:
-                composed_metric_name = f'{log_name_prefix}_{metric_name}@{k}'
-                tensorboard_writer.add_scalar(composed_metric_name, self.metric_value[metric_name][k], epoch_number)
+            metric_data = self.metric_value[metric_name]
+            
+            # Check if metric_data is a dictionary (contains @k values)
+            if isinstance(metric_data, dict) and metric_data:
+                # Dictionary case: metric@k format
+                for k, value in metric_data.items():
+                    composed_metric_name = f'{log_name_prefix}_{metric_name}@{k}'
+                    # Ensure the value is a valid scalar
+                    scalar_value = float(value) if hasattr(value, '__float__') else value
+                    tensorboard_writer.add_scalar(composed_metric_name, scalar_value, epoch_number)
+            else:
+                # Scalar case: just metric name
+                composed_metric_name = f'{log_name_prefix}_{metric_name}'
+                # Ensure the value is a valid scalar
+                scalar_value = float(metric_data) if hasattr(metric_data, '__float__') else metric_data
+                tensorboard_writer.add_scalar(composed_metric_name, scalar_value, epoch_number)
 
         # for i, class_name in enumerate(self.classes_list):
         #     y_true = query_vectors[:, i]

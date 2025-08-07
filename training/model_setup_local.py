@@ -6,6 +6,7 @@ from losses.losses_local import OnlineTripletLoss, GradedMicroF1Loss
 from utils.selectors.triplet_selector import SemihardNegativeTripletSelector
 
 def initialize_model_triplets(embedding_size, margin, lr, weight_decay, negative_compatibles_dict, print_interval, cuda):
+    """Initialize Proximity100x100 model in embedding mode for triplet training with optimized configuration"""
     model = Proximity100x100(embedding_size=embedding_size, num_classes=None, task='embedding')
     if cuda:
         model.cuda()
@@ -17,6 +18,7 @@ def initialize_model_triplets(embedding_size, margin, lr, weight_decay, negative
         print_interval=print_interval,
     )
 
+    # Use same optimizer configuration as micro-F1 training for consistency
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
 

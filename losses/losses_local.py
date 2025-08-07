@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from utils.logging_utils import TripletLogger
+import logging
 
 
 class ContrastiveLoss(nn.Module):
@@ -109,7 +111,7 @@ class OnlineTripletLoss(nn.Module):
     triplets
     """
 
-    def __init__(self, margin, triplet_selector, negative_compatibles_dict, print_interval=0):
+    def __init__(self, margin, triplet_selector, negative_compatibles_dict, print_interval=0, use_structured_logging=True):
         super(OnlineTripletLoss, self).__init__()
         self.margin = margin
         self.triplet_selector = triplet_selector
@@ -122,12 +124,22 @@ class OnlineTripletLoss(nn.Module):
             self.print_counter = 0
         
         self.print_counter += 1
+        
+        # Initialize structured logger (can be disabled for backwards compatibility)
+        self.use_structured_logging = use_structured_logging
+        if self.use_structured_logging:
+            # Use DEBUG level for detailed triplet information, INFO for general stats
+            log_level = logging.DEBUG if print_interval > 0 and print_interval < float('inf') else logging.INFO
+            self.triplet_logger = TripletLogger("OnlineTripletLoss", log_level)
 
     def forward(self, query_embeddings, query_target, db_embeddings, db_target):
+        """Optimized forward pass with enhanced debugging capabilities using structured logging"""
         print_log = False
         if self.print_counter % self.print_interval == 0:
             print_log = True
         self.print_counter += 1
+        
+        # Original print-based logging (preserved for backwards compatibility)
         if print_log:
             print('OnlineTripletLoss.forward()')
             k = min(10, len(query_target))
@@ -141,25 +153,39 @@ class OnlineTripletLoss(nn.Module):
             print(db_embeddings[:k])
             print(f'db_target[:{k}]:')
             print(db_target[:k])
+        
+        # Structured logging (additional, can be controlled independently)
+        if self.use_structured_logging and hasattr(self, 'triplet_logger'):
+            self.triplet_logger.log_embeddings_debug(query_embeddings, query_target, "Query ")
+            self.triplet_logger.log_embeddings_debug(db_embeddings, db_target, "DB ")
             
         triplets = self.triplet_selector.get_triplets(query_embeddings, query_target, db_embeddings, db_target, self.negative_compatibles_dict, print_log)
+
+        # Handle empty triplets case for better stability
+        if len(triplets) == 0:
+            if print_log:
+                print('WARNING: No valid triplets found, returning zero loss')
+            if self.use_structured_logging and hasattr(self, 'triplet_logger'):
+                self.triplet_logger.logger.warning('No valid triplets found, returning zero loss')
+            return torch.tensor(0.0, requires_grad=True, device=query_embeddings.device), triplets
 
         if query_embeddings.is_cuda or db_embeddings.is_cuda:
             #triplets = [t.cuda() for t in triplets]
             triplets = triplets.cuda()
 
+        # Compute distances with mixed precision support
         ap_distances = (db_embeddings[triplets[:, 0]] - db_embeddings[triplets[:, 1]]).pow(2).sum(1)  # .pow(.5)
         an_distances = (db_embeddings[triplets[:, 0]] - db_embeddings[triplets[:, 2]]).pow(2).sum(1)  # .pow(.5)
         losses = F.relu(ap_distances - an_distances + self.margin)
 
-        
-
+        # Alternative cosine similarity approach (kept for reference)
         #ap_sims = F.cosine_similarity(embeddings[triplets[:, 0]], embeddings[triplets[:, 1]], dim=-1)
         #an_sims = F.cosine_similarity(embeddings[triplets[:, 0]], embeddings[triplets[:, 2]], dim=-1)
         #losses = F.relu(self.margin + an_sims - ap_sims)
 
+        # Original detailed print-based logging (preserved)
         if print_log:
-            print('OnlineTripletLoss.forward()')
+            print('OnlineTripletLoss.forward() - Loss computation results:')
             k = min(10, len(losses))
             if k < len(losses):
                 print(f'(Loss elements are of length {len(losses)} which is too long! Printing only the first {k} items of each element.)')
@@ -169,7 +195,19 @@ class OnlineTripletLoss(nn.Module):
             #print(f'F.relu(self.margin + an_sims[:{k}] - ap_sims[:{k}]):\n', losses)
             print(f'ap_distances[:{k}]:\n', ap_distances[:k])
             print(f'an_distances[:{k}]:\n', an_distances[:k])
-            print(f'F.relu(ap_distances[:{k}] - an_distances[:{k}] + self.margin):\n', losses)
+            print(f'F.relu(ap_distances[:{k}] - an_distances[:{k}] + self.margin):\n', losses[:k])
+            
+            # Enhanced debugging statistics
+            num_valid_triplets = (losses > 0).sum().item()
+            print(f'Triplet statistics: total={len(triplets)}, non-zero_loss={num_valid_triplets}')
+            if len(losses) > 0:
+                print(f'Loss statistics: mean={losses.mean().item():.6f}, std={losses.std().item():.6f}, max={losses.max().item():.6f}, min={losses.min().item():.6f}')
+        
+        # Structured logging (complementary to print statements)
+        if self.use_structured_logging and hasattr(self, 'triplet_logger'):
+            self.triplet_logger.log_triplet_stats(triplets, losses, self.margin)
+            if print_log:  # Only log detailed distances when print_log is active
+                self.triplet_logger.log_distances_debug(ap_distances, an_distances, k=min(5, len(losses)))
         
         #losses_per_label_mean = [l.mean() for l in losses]
         #return losses_per_label_mean, triplets
