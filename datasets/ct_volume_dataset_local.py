@@ -103,11 +103,9 @@ class ProximityPreprocessedCTDataset(Dataset):
         self.paths = embeddings_path_list
         self.labels = labels_list
         self.augmentations = augmentations
-        #self.names = []
         self.label_vector_helper = LabelVectorHelper()
         self.label_to_indices = {label: np.where(self.labels == label)[0]
                                  for label in sorted(set(self.labels))}
-
 
         self.labels = np.array(self.labels)
         self.positive_pairs_dict, self.negative_pairs_dict = self.label_vector_helper.build_pair_indices(self.labels)
@@ -118,18 +116,7 @@ class ProximityPreprocessedCTDataset(Dataset):
                 for i in range(len(self))
             ]
 
-        # Define deterministic preprocessing
-        self.preprocess = tio.Compose([
-            tio.Resample(1),
-            tio.Resize([-1, 150, 150], image_interpolation='nearest'),
-            tio.RescaleIntensity(out_min_max=(0, 1))
-        ])
-
-        # Optional augmentation
-        self.tio_transforms = tio.Compose([
-            tio.RandomAffine(scales=(0.9, 1.1), degrees=10, p=0.5),
-            tio.RandomNoise(mean=0, std=(0, 0.05), p=0.5),
-        ])
+        # Removed TorchIO preprocessing in favor of direct processing
 
     def rand_flip(self, ctvol):
         """Flip <ctvol> along a random axis with 50% probability"""
@@ -171,39 +158,14 @@ class ProximityPreprocessedCTDataset(Dataset):
         return self.negative_pairs_dict[self.labels[anchor_idx]]
 
     def _load_volume(self, path):
-        #t0 = time.time()
+        """Load and preprocess volume with uint8 optimization"""
         with np.load(path) as data:
-            #t1 = time.time()
-            vol = data['volume']
-            #t2 = time.time()
-            vol = np.transpose(vol, axes=[3, 0, 1, 2]) # transpose [1, H, W, D] to [D, 1, H, W]
-            #vol = np.transpose(vol, axes=[0, 3, 1, 2]) # transpose [1, H, W, D] to [1, D, H, W]
-            #t3 = time.time()
-            #tio_image = tio.ScalarImage(tensor=vol, affine=np.eye(4))
-            #t4 = time.time()
-            #tio_image = self.preprocess(tio_image)
-            #t5 = time.time()
-            if self.augmentations and self.train:
-                #t6 = time.time()
-                #tio_image = self.tio_transforms(tio_image)
-                #t7 = time.time()
-                #vol = self.rand_rotate(self.rand_flip(tio_image["data"].squeeze(0).numpy()))
-                pass
-            else:
-                #t6 = time.time()
-                #vol = tio_image["data"].squeeze(0).numpy()
-                #t7 = time.time()
-                pass
-            #t8 = time.time()
-            #vol = ( vol - 0.449 ) / 0.226 # Subtract ImageNet mean and divide by its std as we are using pretrained ResNet18 weights in the network
-            #t9 = time.time()
+            vol = data['volume']  # Expected shape: [1, H, W, D]
+            vol = np.transpose(vol, axes=[3, 0, 1, 2])  # → [D, 1, H, W]
+            
+            # Memory-efficient uint8 processing (no normalization here - done in collate_fn)
             vol = vol.astype(np.float16)
-            #t10 = time.time()
-            #times = [t0,t1,t2,t3,t4,t5,t6,t7,t8,t9,t10]
-            #times_str_list = [f't{i}: {times[i]-times[0]}' for i in range(len(times))]
-            #times_str = '\n'.join(times_str_list)
-            #print(times_str)
-            return vol # shape [ D, 1, H, W]
+            return vol  # shape [D, 1, H, W], uint8 format
             
 
 class ProximityPrerocessedCTTripletDataset(Dataset):
@@ -212,16 +174,9 @@ class ProximityPrerocessedCTTripletDataset(Dataset):
         self.paths = embeddings_path_list
         self.labels = labels_list
         self.augmentations = augmentations
-        #self.names = []
         self.label_vector_helper = LabelVectorHelper()
         self.label_to_indices = {label: np.where(self.labels == label)[0]
                                  for label in sorted(set(self.labels))}
-
-        # for p in embeddings_path_list:
-        #     with np.load(p) as data:
-        #         self.labels.append(data['label'])
-        #         self.names.append(data['name'])
-
         
         self.labels = np.array(self.labels)
         self.positive_pairs_dict, self.negative_pairs_dict = self.label_vector_helper.build_pair_indices(self.labels)
@@ -233,18 +188,7 @@ class ProximityPrerocessedCTTripletDataset(Dataset):
                 for i in range(len(self))
             ]
 
-        # Define deterministic preprocessing
-        self.preprocess = tio.Compose([
-            tio.Resample(1),
-            tio.Resize([224, 224, -1], image_interpolation='nearest'),
-            tio.RescaleIntensity(out_min_max=(0, 1))
-        ])
-
-        # Optional augmentation
-        self.tio_transforms = tio.Compose([
-            tio.RandomAffine(scales=(0.9, 1.1), degrees=10),
-            tio.RandomNoise(mean=0, std=(0, 0.05)),
-        ])
+        # Removed TorchIO preprocessing in favor of direct processing for efficiency
 
     def rand_flip(self, ctvol):
         """Flip <ctvol> along a random axis with 50% probability"""
@@ -307,15 +251,13 @@ class ProximityPrerocessedCTTripletDataset(Dataset):
         return self.negative_pairs_dict[self.labels[anchor_idx]]
 
     def _load_volume(self, path):
-            with np.load(path) as data:
-                tio_image = tio.ScalarImage(tensor=data['volume'], affine=np.eye(4))
-                tio_image = self.preprocess(tio_image)
-                vol = tio_image["data"].squeeze(0).numpy()
-                if self.augmentations and self.train:
-                    tio_image = self.tio_transforms(tio_image)
-                    vol = self.rand_rotate(self.rand_flip(tio_image["data"].squeeze(0).numpy()))
-                vol = ( vol - 0.449 ) / 0.226 # Subtract ImageNet mean and divide by its std as we are using pretrained ResNet18 weights in the network
-                return vol[np.newaxis] # shape [1, D, H, W]
+        """Load and preprocess volume with uint8 optimization for triplet training"""
+        with np.load(path) as data:
+            vol = data['volume']  # Expected shape: [1, H, W, D]
+            vol = np.transpose(vol, axes=[3, 0, 1, 2])  # → [D, 1, H, W]
+            
+            # Return uint8 data for memory efficiency - normalization handled in collate_fn
+            return vol  # shape [D, 1, H, W], uint8 format
             
 
 class ProximityCTTripletDataset(tio.SubjectsDataset):

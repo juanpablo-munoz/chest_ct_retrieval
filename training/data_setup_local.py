@@ -15,10 +15,6 @@ import kornia.augmentation as K
 import torch.nn.functional as F
 from utils.transforms import RandomGaussianNoise3D
 
-ct_depth = 300
-ct_resize_H = 150
-ct_resize_W = 150
-
 gpu_aug = K.AugmentationSequential(
     K.RandomAffine3D(degrees=(5, 5, 5), scale=(0.95, 1.05), p=0.5),
     RandomGaussianNoise3D(mean=0.0, std=0.01, p=0.5),
@@ -26,6 +22,7 @@ gpu_aug = K.AugmentationSequential(
 ).to("cuda")
 
 def collate_tensor_batch(batch, apply_gpu_aug=False):
+    """Optimized collation function with uint8 support and GPU-ready processing"""
     samples = []
     transposed_target = []
 
@@ -33,23 +30,12 @@ def collate_tensor_batch(batch, apply_gpu_aug=False):
         samples.append(sample)
         transposed_target.append(target)
 
-    samples = torch.tensor(np.array(samples))  # [B, D, 1, H, W]
+    # Convert uint8 data to float32 tensor
+    samples = torch.tensor(np.array(samples), dtype=torch.float16)  # [B, D, 1, H, W]
     transposed_target = torch.tensor(transposed_target)
 
-    samples = samples.permute(0, 2, 1, 3, 4)  # → [B, 1, D, H, W]
-    # samples = F.interpolate(
-    #     samples,
-    #     size=[ct_depth, ct_resize_H, ct_resize_W],
-    #     mode='trilinear',
-    #     align_corners=False
-    # )
-
-    # Don't use GPU transforms here if num_workers > 0
-    if apply_gpu_aug:
-        raise RuntimeError("Cannot apply GPU transforms in collate_fn with num_workers > 0")
-
-    samples = samples.permute(0, 2, 1, 3, 4)  # → [B, D, 1, H, W]
-    samples /= 255.0
+    # Normalize uint8 data (0-255) to [0,1] then apply ImageNet normalization
+    samples = samples / 255.0
     samples = (samples - 0.449) / 0.226
 
     return samples, transposed_target
@@ -62,15 +48,22 @@ class CollateFn:
         return collate_tensor_batch(batch, apply_gpu_aug=self.apply_gpu_aug)
 
 def collate_tensor_batch_vector_labels(batch):
+    """Collation function with vector labels for triplet training"""
     label_vector_helper = LabelVectorHelper()
     samples = []
     transposed_target = []
     for sample, target in batch:
         samples.append(sample)
         transposed_target.append(target)
-    samples = torch.tensor(np.array(samples))
-    #transposed_target = np.array(transposed_target).transpose().tolist()
+    
+    # Convert uint8 data to float32 and normalize
+    samples = torch.tensor(np.array(samples), dtype=torch.float16)
     transposed_target = torch.tensor(transposed_target)
+    
+    # Normalize uint8 data (0-255) to [0,1] then apply ImageNet normalization
+    samples = samples / 255.0
+    samples = (samples - 0.449) / 0.226
+    
     vector_labels = [label_vector_helper.get_label_vector(lbl) for lbl in transposed_target]
     return samples, vector_labels
 
@@ -130,7 +123,8 @@ def load_dataset_microf1(volume_dir, seed, train_frac, train_eval_frac, augmenta
 
 
 def create_loaders(train_set, test_set, n_classes, n_samples, cuda):
-    kwargs = {'num_workers': 2, 'pin_memory': True} if cuda else {}
+    """Create optimized data loaders for triplet training with GPU-ready processing"""
+    kwargs = {'num_workers': 2, 'prefetch_factor': 1, 'persistent_workers': True, 'pin_memory': True} if cuda else {}
 
     sampler_train = BalancedBatchSampler(
         train_set.labels, PROXIMITY_VECTOR_LABELS_FOR_TRAINING, n_classes, n_samples, multilabel=True
@@ -151,7 +145,7 @@ def create_loaders(train_set, test_set, n_classes, n_samples, cuda):
     }
 
 def create_loaders_microf1(train_set, train_eval_set, test_set, batch_size, cuda):
-    kwargs = {'num_workers': 4, 'prefetch_factor': 1, 'persistent_workers': True, 'pin_memory': True} if cuda else {}
+    kwargs = {'num_workers': 2, 'prefetch_factor': 1, 'persistent_workers': True, 'pin_memory': True} if cuda else {}
 
     return {
         "train": DataLoader(train_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_size=batch_size, **kwargs),

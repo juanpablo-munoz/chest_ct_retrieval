@@ -10,6 +10,11 @@ from datetime import datetime
 from utils.embedding import extract_embeddings
 from utils.selectors import HardestNegativeTripletSelector, SemihardNegativeTripletSelector
 from losses.losses import OnlineTripletLoss
+import torch.nn.functional as F
+import kornia.augmentation as K
+from utils.transforms import RandomGaussianNoise3D
+from utils.logging_utils import TripletLogger
+import logging
 
 class Trainer:
     def __init__(self, train_loader, val_loader, train_eval_loader, val_eval_loader, train_full_loader, val_full_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, train_full_loader_switch, metrics=[], start_epoch=0, accumulation_steps=1) -> None:
@@ -43,6 +48,19 @@ class Trainer:
         self.tensorboard_writer.add_hparams
         self.use_amp = self.cuda
         self.scaler = GradScaler(enabled=self.use_amp)
+        
+        # Add GPU augmentation pipeline similar to micro-F1 training
+        self.apply_gpu_aug = True
+        self.gpu_aug = K.AugmentationSequential(
+            K.RandomAffine3D(degrees=(5, 5, 5), scale=(0.95, 1.05), p=0.5),
+            RandomGaussianNoise3D(mean=0.0, std=0.01, p=0.5),
+            data_keys=["input"]
+        ).to("cuda")
+        
+        # Initialize structured training loggers
+        self.trainer_logger = TripletLogger("TripletTrainer", logging.INFO)
+        self.batch_logger = TripletLogger("TripletBatch", logging.DEBUG)
+        
         #self.tensorboard_writer.add_graph(self.model)
         for epoch in range(0, self.start_epoch):
             scheduler.step()
@@ -156,10 +174,16 @@ class Trainer:
             train_batches = self.train_full_loader.generate_batches_from_triplets(pre_epoch_triplets)
             n_train_batches = min(30, len(self.train_full_loader))
             print(f'\n### NOW FINDING TRIPLETS ACROSS COMPLETE TRAINING DATASET ###')
-            print(f'Last epoch got training loss of {round(self.last_train_loss, 4)} and last 5 epochs got an average of {round(np.array(self.avg_nonzero_triplets[-5:]).mean(), 1)} non-zero triplets.')
+            self.trainer_logger.logger.info('Switching to full dataset triplet mining mode')
+            
+            avg_nonzero = round(np.array(self.avg_nonzero_triplets[-5:]).mean(), 1)
+            print(f'Last epoch got training loss of {round(self.last_train_loss, 4)} and last 5 epochs got an average of {avg_nonzero} non-zero triplets.')
+            self.trainer_logger.logger.info(f'Last training loss: {self.last_train_loss:.4f}, avg nonzero triplets (last 5 epochs): {avg_nonzero}')
+            
             print('True triplet-loss on train dataset:', round(true_loss_outputs.item(), 4))
             print('Non-zero triplets on train dataset:', len(pre_epoch_triplets))
             print(f'Training on a sample of {n_train_batches} batches')
+            self.trainer_logger.logger.info(f'Pre-epoch triplet stats - Loss: {true_loss_outputs.item():.4f}, Triplets found: {len(pre_epoch_triplets)}, Batch sample size: {n_train_batches}')
 
             self.model.train()
             self.optimizer.zero_grad()
@@ -172,26 +196,30 @@ class Trainer:
                 #if not type(data) in (tuple, list):
                 #    data = (data,)
                 if self.cuda:
-                    #data = tuple(d.cuda() for d in data)
                     data = data.cuda()
                     if target is not None:
                         target = target.cuda()
 
                 with autocast('cuda', enabled=self.use_amp):
+                    # Apply data shape transformations and GPU augmentations
+                    data = data.permute(0, 2, 1, 3, 4)  # [B, D, 1, H, W] → [B, 1, D, H, W]
+                    
+                    if self.apply_gpu_aug:
+                        data = self.gpu_aug(data)
+                        
+                    data = F.interpolate(
+                        data,
+                        size=[data.size()[-3], self.model.input_H, self.model.input_W],
+                        mode='trilinear',
+                        align_corners=False
+                    )
+                    data = data.permute(0, 2, 1, 3, 4)  # Back to [B, D, 1, H, W]
+                    
                     outputs = self.model(data)
-
-                    #if type(outputs) not in (tuple, list):
-                    #    outputs = (outputs,)
-
-                    loss_inputs = outputs
-                    #if target is not None:
-                        #target = (target,)
-                        #torch.cat((loss_inputs, target))
-
-                    #print('train_epoch.loss_inputs', loss_inputs)
+                    
                     print(f'\n### BATCH {total_batches} TRAINING LOSS ###')
                     print(f'Batch labels: {target}')
-                    loss_outputs = self.loss_fn(query_embeddings=loss_inputs, query_target=target, db_embeddings=loss_inputs, db_target=target)
+                    loss_outputs = self.loss_fn(query_embeddings=outputs, query_target=target, db_embeddings=outputs, db_target=target)
                     #print('train_epoch.loss_outputs', loss_outputs)
                     if type(loss_outputs) in (tuple, list):
                         loss, triplets = loss_outputs
@@ -210,6 +238,11 @@ class Trainer:
                 n_triplets = len(triplets)
                 print('loss:', loss)
                 print('n_triplets:', round(n_triplets, 1))
+                
+                # Log batch results with structured logger
+                if total_batches % 5 == 0:  # Log every 5th batch to avoid spam
+                    self.batch_logger.logger.info(f'Full dataset mode - Batch {total_batches}: Loss={loss.item():.6f}, Triplets={n_triplets}')
+                
                 losses.append(loss.item())
                 total_loss += loss.item()
 
@@ -261,25 +294,37 @@ class Trainer:
                 if not type(data) in (tuple, list):
                     data = (data,)
                 if self.cuda:
-                    data = tuple(d.cuda() for d in data)
+                    if not isinstance(data, tuple):
+                        data = data.cuda()
+                    else:
+                        data = tuple(d.cuda() for d in data)
                     if target is not None:
                         target = target.cuda()
 
                 with autocast('cuda', enabled=self.use_amp):
-                    outputs = self.model(*data)
-
-                    #if type(outputs) not in (tuple, list):
-                    #    outputs = (outputs,)
-
-                    loss_inputs = outputs
-                    #if target is not None:
-                        #target = (target,)
-                        #torch.cat((loss_inputs, target))
-
-                    #print('train_epoch.loss_inputs', loss_inputs)
+                    # Apply data shape transformations and GPU augmentations
+                    if not isinstance(data, tuple):
+                        # Single tensor input - apply transformations and augmentations
+                        data = data.permute(0, 2, 1, 3, 4)  # [B, D, 1, H, W] → [B, 1, D, H, W]
+                        
+                        if self.apply_gpu_aug:
+                            data = self.gpu_aug(data)
+                            
+                        data = F.interpolate(
+                            data,
+                            size=[data.size()[-3], self.model.input_H, self.model.input_W],
+                            mode='trilinear',
+                            align_corners=False
+                        )
+                        data = data.permute(0, 2, 1, 3, 4)  # Back to [B, D, 1, H, W]
+                        outputs = self.model(data)
+                    else:
+                        # Tuple input - preserve existing behavior
+                        outputs = self.model(*data)
+                    
                     print(f'\n### BATCH {total_batches} OF {len(self.train_loader)} TRAINING LOSS ###')
                     print(f'Batch labels: {target}')
-                    loss_outputs = self.loss_fn(query_embeddings=loss_inputs, query_target=target, db_embeddings=loss_inputs, db_target=target)
+                    loss_outputs = self.loss_fn(query_embeddings=outputs, query_target=target, db_embeddings=outputs, db_target=target)
                     #print('train_epoch.loss_outputs', loss_outputs)
                     if type(loss_outputs) in (tuple, list):
                         loss, triplets = loss_outputs
@@ -298,6 +343,11 @@ class Trainer:
                 n_triplets = len(triplets)
                 print('loss:', loss)
                 print('n_triplets:', round(n_triplets, 1))
+                
+                # Log batch results with structured logger  
+                if total_batches % 10 == 0:  # Log every 10th batch to avoid spam
+                    self.batch_logger.logger.info(f'Regular mode - Batch {total_batches}/{len(self.train_loader)}: Loss={loss.item():.6f}, Triplets={n_triplets}')
+                
                 losses.append(loss.item())
                 total_loss += loss.item()
 
@@ -356,6 +406,7 @@ class Trainer:
 
     def test_epoch(self):
         print('### GETTING VALIDATION METRICS ###')
+        self.trainer_logger.logger.info('Starting validation metrics computation')
         with torch.no_grad():
             self.model.eval()
             for metric in self.metrics:
@@ -364,11 +415,14 @@ class Trainer:
             negative_compatibles_dict = self.loss_fn.negative_compatibles_dict
             eval_loss_fn = OnlineTripletLoss(margin, SemihardNegativeTripletSelector(margin), negative_compatibles_dict, print_interval=0)
             print('### GENERATING POST-EPOCH TRAINING SET EMBEDDINGS ###')
+            self.trainer_logger.logger.info('Extracting training set embeddings')
             post_epoch_train_embeddings, train_labels = extract_embeddings(self.train_eval_loader, self.model)
             print('### GENERATING POST-EPOCH VALIDATION SET EMBEDDINGS ###')
+            self.trainer_logger.logger.info('Extracting validation set embeddings')
             post_epoch_val_embeddings, val_labels = extract_embeddings(self.val_eval_loader, self.model)
             #true_val_loss_outputs, val_epoch_triplets = eval_loss_fn(post_epoch_val_embeddings, val_labels)
             print('### EVALUATING LOSS USING VAL EMBEDDINGS AS QUERIES ON TRAINING SET EMBEDDINGS ###')
+            self.trainer_logger.logger.info('Computing validation loss using val embeddings as queries on training embeddings')
             true_val_loss_outputs, val_epoch_triplets = eval_loss_fn(query_embeddings=post_epoch_val_embeddings, query_target=val_labels, db_embeddings=post_epoch_train_embeddings, db_target=train_labels)
             epoch_predictions = []
             epoch_targets = []
@@ -379,6 +433,9 @@ class Trainer:
             #n_triplets = sum([len(t) for t in val_epoch_triplets])
             epoch_targets.append(val_labels)
             epoch_n_triplets.append(n_triplets)
+            
+            # Log validation results
+            self.trainer_logger.logger.info(f'Validation triplet stats - Loss: {loss:.4f}, Triplets found: {n_triplets}')
             #epoch_predictions = torch.cat(epoch_predictions, dim=0)
             epoch_predictions = torch.empty(0)
             #epoch_targets = torch.cat(epoch_targets, dim=0)
@@ -397,4 +454,5 @@ class Trainer:
                         training=False,
                     )
             mean_val_loss = loss
+            self.trainer_logger.logger.info(f'Validation metrics computation completed - Mean loss: {mean_val_loss:.4f}')
             return mean_val_loss, self.metrics
