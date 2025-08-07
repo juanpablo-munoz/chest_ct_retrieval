@@ -101,7 +101,7 @@ class Trainer:
                 if "mAP@k" in metric.name():
                     k = 10
                     self.val_map_at_k.append(metric.value()['mean_average_precision'][k])
-                elif metric.name() == "Micro-F1":
+                elif metric.name() == "f1":
                     self.val_micro_f1.append(metric.value())
                     
                 print(message)
@@ -113,8 +113,9 @@ class Trainer:
             if self.val_micro_f1 and self.val_micro_f1[-1] == max(self.val_micro_f1):
                 best_metric_reached = True
                 self.best_val_loss = val_loss
+                k = 10
                 print(f"Best validation micro-F1 reached! micro-F1={self.val_micro_f1[-1]:.4f}. Saving model checkpoint...")
-                metric_str = f"micro-f1={self.val_micro_f1[-1]:.4f}"
+                metric_str = f"micro-f1@{k}={self.val_micro_f1[-1]:.4f}"
                 timestamp = datetime.now().strftime('%Y%m%d')
                 epoch_str = "epoch={:03d}".format(self.current_epoch)
                 torch.save(
