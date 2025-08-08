@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from itertools import combinations
-from ..distances import query_dataset_dist
+from ..distances import query_dataset_dist, psim_cosine_query_dataset
 from ..compatibility import determine_negative_compatibles
 from typing import Callable, Optional, Dict, List
 
@@ -35,10 +35,11 @@ def semihard_negative(loss_values, margin):
         return random_hard_negative(loss_values)
 
 class FunctionNegativeTripletSelector(TripletSelector):
-    def __init__(self, margin, negative_selection_fn, cpu=True):
+    def __init__(self, margin, negative_selection_fn, label_vector_helper, cpu=True):
         self.margin = margin
         self.negative_selection_fn = negative_selection_fn
         self.cpu = cpu
+        self.label_vector_helper = label_vector_helper
 
     def get_triplets(
         self,
@@ -56,7 +57,8 @@ class FunctionNegativeTripletSelector(TripletSelector):
             query_embeddings = query_embeddings.cpu()
             db_embeddings = db_embeddings.cpu()
 
-        distance_matrix = query_dataset_dist(query_embeddings, db_embeddings)
+        #distance_matrix = query_dataset_dist(query_embeddings, db_embeddings)
+        distance_matrix = psim_cosine_query_dataset(query_embeddings, db_embeddings)
 
         if print_log:
             print('FunctionNegativeTripletSelector.get_triplets()')
@@ -66,8 +68,14 @@ class FunctionNegativeTripletSelector(TripletSelector):
             print(f'distance_matrix[:{k}]:')
             print(distance_matrix[:k])
 
-        query_labels = query_labels.cpu().numpy()
-        db_labels = db_labels.cpu().numpy()
+        query_labels_as_vectors = query_labels.cpu().numpy()
+        db_labels_as_vectors = db_labels.cpu().numpy()
+
+        query_labels = np.array([self.label_vector_helper.get_class_id(ql_v.tolist()) for ql_v in query_labels_as_vectors])
+        db_labels = np.array([self.label_vector_helper.get_class_id(dbl_v.tolist()) for dbl_v in db_labels_as_vectors])
+
+        print('query_labels:\n', query_labels)
+        print('db_labels:\n', db_labels)
 
         triplets = []
 
@@ -140,7 +148,7 @@ class FunctionNegativeTripletSelector(TripletSelector):
                 if n_sel is not None:
                     n_idx = db_neg_indices[n_sel]
                     if print_log:
-                        print(f'Semi-hard negative index for anchor_positive ({a_idx}, {p_idx}) is: {n_idx}')
+                        print(f'Hardest negative index for anchor_positive ({a_idx}, {p_idx}) is: {n_idx}')
                     triplets.append([a_idx, p_idx, n_idx])
                 else:
                     fallback = random_hard_negative(loss_vals)
@@ -160,11 +168,11 @@ class FunctionNegativeTripletSelector(TripletSelector):
 
         return torch.LongTensor(triplets)
 
-def HardestNegativeTripletSelector(margin, cpu=False):
-    return FunctionNegativeTripletSelector(margin, hardest_negative, cpu)
+def HardestNegativeTripletSelector(margin, label_vector_helper, cpu=False):
+    return FunctionNegativeTripletSelector(margin, hardest_negative, label_vector_helper, cpu)
 
-def RandomNegativeTripletSelector(margin, cpu=False):
-    return FunctionNegativeTripletSelector(margin, random_hard_negative, cpu)
+def RandomNegativeTripletSelector(margin, label_vector_helper, cpu=False):
+    return FunctionNegativeTripletSelector(margin, random_hard_negative, label_vector_helper, cpu)
 
-def SemihardNegativeTripletSelector(margin, cpu=False):
-    return FunctionNegativeTripletSelector(margin, lambda x: semihard_negative(x, margin), cpu)
+def SemihardNegativeTripletSelector(margin, label_vector_helper, cpu=False):
+    return FunctionNegativeTripletSelector(margin, lambda x: semihard_negative(x, margin), label_vector_helper, cpu)

@@ -16,8 +16,8 @@ training:
   augmentations: True
   batch:
     n_classes: 2
-    n_samples: 3
-    batch_size: 11
+    n_samples: 12
+    batch_size: 8
   optimizer:
     type: adam
     lr: 1e-5
@@ -27,8 +27,8 @@ training:
     gamma: 0.1
   metrics:
     loss: True
-    average_nonzero_triplets: False
-    total_nonzero_triplets: False
+    average_nonzero_triplets: True
+    total_nonzero_triplets: True
     ndcg: False
     recall: False
     all_metrics: True
@@ -54,4 +54,4 @@ paths:
     microf1_runs: runs_microf1
 
 logging:
-  log_interval: 1
+  log_interval: 50

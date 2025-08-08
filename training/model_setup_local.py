@@ -3,7 +3,8 @@ from torch.optim import lr_scheduler
 
 from models.networks import Proximity100x100, Proximity300x300
 from losses.losses_local import OnlineTripletLoss, GradedMicroF1Loss
-from utils.selectors.triplet_selector import SemihardNegativeTripletSelector
+from utils.selectors.triplet_selector import SemihardNegativeTripletSelector, HardestNegativeTripletSelector
+from datasets.base import LabelVectorHelper
 
 def initialize_model_triplets(embedding_size, margin, lr, weight_decay, negative_compatibles_dict, print_interval, cuda):
     """Initialize Proximity100x100 model in embedding mode for triplet training with optimized configuration"""
@@ -11,9 +12,11 @@ def initialize_model_triplets(embedding_size, margin, lr, weight_decay, negative
     if cuda:
         model.cuda()
 
+    label_vector_helper = LabelVectorHelper()
+
     loss_fn = OnlineTripletLoss(
         margin=margin,
-        triplet_selector=SemihardNegativeTripletSelector(margin),
+        triplet_selector=HardestNegativeTripletSelector(margin, label_vector_helper),
         negative_compatibles_dict=negative_compatibles_dict,
         print_interval=print_interval,
     )

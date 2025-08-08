@@ -178,6 +178,8 @@ class OnlineTripletLoss(nn.Module):
         an_distances = (db_embeddings[triplets[:, 0]] - db_embeddings[triplets[:, 2]]).pow(2).sum(1)  # .pow(.5)
         losses = F.relu(ap_distances - an_distances + self.margin)
 
+        num_valid_triplets = (losses > 0).sum().item()
+
         # Alternative cosine similarity approach (kept for reference)
         #ap_sims = F.cosine_similarity(embeddings[triplets[:, 0]], embeddings[triplets[:, 1]], dim=-1)
         #an_sims = F.cosine_similarity(embeddings[triplets[:, 0]], embeddings[triplets[:, 2]], dim=-1)
@@ -198,7 +200,6 @@ class OnlineTripletLoss(nn.Module):
             print(f'F.relu(ap_distances[:{k}] - an_distances[:{k}] + self.margin):\n', losses[:k])
             
             # Enhanced debugging statistics
-            num_valid_triplets = (losses > 0).sum().item()
             print(f'Triplet statistics: total={len(triplets)}, non-zero_loss={num_valid_triplets}')
             if len(losses) > 0:
                 print(f'Loss statistics: mean={losses.mean().item():.6f}, std={losses.std().item():.6f}, max={losses.max().item():.6f}, min={losses.min().item():.6f}')
@@ -211,4 +212,4 @@ class OnlineTripletLoss(nn.Module):
         
         #losses_per_label_mean = [l.mean() for l in losses]
         #return losses_per_label_mean, triplets
-        return losses.mean(), triplets
+        return losses.mean(), triplets, num_valid_triplets

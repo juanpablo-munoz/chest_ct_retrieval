@@ -10,9 +10,9 @@ import torch.multiprocessing as mp
 
 def run_triplet_training(cfg, cuda_available, cuda_device=None):
     """Run triplet-based training pipeline"""
-    from training.data_setup import load_dataset, create_loaders
-    from training.model_setup import initialize_model
-    from training.trainer import Trainer
+    from training.data_setup_local import load_dataset, create_loaders
+    from training.model_setup_local import initialize_model_triplets
+    from training.trainer_local import Trainer
     
     print("=== TRIPLET TRAINING MODE ===")
     
@@ -23,14 +23,14 @@ def run_triplet_training(cfg, cuda_available, cuda_device=None):
     
     # Load dataset
     train_set, test_set, neg_compatibles = load_dataset(
-        cfg["paths"]["dr2156"]["preprocessed_300_int8"], 
+        cfg["paths"]["dr2156"]["preprocessed_270_uint8"], 
         cfg["training"]["seed"], 
         float(cfg["dataset"]["train_frac"]),
         augmentations_arg=cfg["training"]["augmentations"]
     )
     
     # Initialize model
-    p_model, p_loss_fn, p_optimizer, p_scheduler = initialize_model(
+    p_model, p_loss_fn, p_optimizer, p_scheduler = initialize_model_triplets(
         embedding_size=int(cfg["model"]["embedding_size"]),
         margin=float(cfg["loss"]["margin"]),
         lr=float(cfg["training"]["optimizer"]["lr"]),
@@ -72,7 +72,7 @@ def run_triplet_training(cfg, cuda_available, cuda_device=None):
         train_full_loader_switch=cfg["training"]["train_full_loader_switch"],
         metrics=p_metrics,
         start_epoch=0,
-        accumulation_steps=cfg.get("training", {}).get("accumulation_steps", 3)
+        accumulation_steps=cfg.get("training", {}).get("accumulation_steps", 1)
     )
     
     return trainer
