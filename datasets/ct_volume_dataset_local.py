@@ -116,7 +116,8 @@ class ProximityPreprocessedCTDataset(Dataset):
                 for i in range(len(self))
             ]
 
-        # Removed TorchIO preprocessing in favor of direct processing
+    def get_labels_as_vectors(self):
+        return torch.LongTensor([self.label_vector_helper.get_label_vector(l) for l in self.labels])
 
     def rand_flip(self, ctvol):
         """Flip <ctvol> along a random axis with 50% probability"""

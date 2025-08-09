@@ -1096,23 +1096,31 @@ class AllMetrics(Metric):
 
     def calculate_per_class_recall(self, query_vector, relevances):
         relevances = np.array(relevances)
-        k_top = [min(k, len(relevances)) for k in self.k]
-        total_relevants_per_class = np.sum(relevances, axis=0)
         per_class_recall = dict()
         for i, class_is_queried in enumerate(query_vector):
             if class_is_queried == 0:
                 continue
+            sorted_relevants = -np.sort(-1 * relevances[:, i])
+            last_relevant_idx = np.where(sorted_relevants > 0)[0]
+            if len(last_relevant_idx) > 0:
+                last_relevant_idx = last_relevant_idx[-1]
+            else:
+                last_relevant_idx = 0
+            n_relevants = last_relevant_idx + 1
+            k_top = [min(k, len(relevances), n_relevants) for k in self.k]
             current_class = self.classes_list[i]
-            per_class_recall[current_class] = {k: np.sum(relevances[:k, i])/max(1., total_relevants_per_class[i]) for k in k_top}
+            per_class_recall[current_class] = {k: np.sum(relevances[:k_bounded, i])/max(1, np.sum(sorted_relevants[:k_bounded])) for k, k_bounded in zip(self.k, k_top)}
         return per_class_recall
 
     def calculate_recall(self, relevances):
         sorted_relevants = -np.sort(-1 * relevances)
-        last_relevant_idx = np.where(sorted_relevants > 0.0)[0][-1]
+        last_relevant_idx = np.where(sorted_relevants > 0)[0]
+        if len(last_relevant_idx) > 0:
+            last_relevant_idx = last_relevant_idx[-1]
+        else:
+            last_relevant_idx = 0
         n_relevants = last_relevant_idx + 1
-        #total_relevants = np.sum(relevances, axis=-1)
         relevances = np.array(relevances)
-        #k_top = [min(k, len(relevances)) for k in self.k]
         k_top = [min(k, len(relevances), n_relevants) for k in self.k]
         recall = {k_original: np.sum(relevances[:k])/max(1, np.sum(sorted_relevants[:k])) for k, k_original in zip(k_top, self.k)}
         return recall

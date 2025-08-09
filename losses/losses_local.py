@@ -45,6 +45,75 @@ class TripletLoss(nn.Module):
         #print('distance_positive.size():', distance_positive.size())
         return losses.mean() if size_average else losses.sum()
 
+class HybridBCEGradedMicroF1Loss(nn.Module):
+    def __init__(self, y_true_all=None, alpha=0.5, beta=0.5, smooth=1e-7, device=None):
+        """
+        Args:
+            y_true_all (Tensor, optional): Full label matrix [N, C] (0/1 values).
+                                            If provided, pos_weight will be computed.
+            alpha (float): Weight for graded micro-F1 term.
+            beta (float): Weight for BCE term.
+            smooth (float): Smoothing factor for F1 calculation.
+            device (str or torch.device, optional): If None, will auto-detect CUDA if available.
+        """
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.smooth = smooth
+
+        # Determine device
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        elif not isinstance(device, torch.device):
+            device = torch.device(device)
+        self.device = device
+
+        # Compute pos_weight if dataset labels are provided
+        if y_true_all is not None:
+            if y_true_all.dtype != torch.float32:
+                y_true_all = y_true_all.float()
+
+            pos_counts = y_true_all.sum(dim=0)
+            neg_counts = y_true_all.size(0) - pos_counts
+            self.pos_weight = (neg_counts / (pos_counts + 1e-7)).to(torch.float32).to(self.device)
+        else:
+            self.pos_weight = None
+
+    def forward(self, y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            y_pred (Tensor): Raw logits [B, C]
+            y_true (Tensor): Binary targets [B, C]
+        Returns:
+            Tensor: Scalar hybrid loss
+        """
+        # Ensure tensors are on the same device as the loss
+        y_pred = y_pred.to(self.device)
+        y_true = y_true.to(self.device).float()
+
+        # BCE term
+        bce_loss = F.binary_cross_entropy_with_logits(
+            y_pred,
+            y_true,
+            pos_weight=self.pos_weight,
+            reduction="mean"
+        )
+
+        # F1 term
+        y_prob = torch.sigmoid(y_pred)
+        tp = (y_prob * y_true).sum(dim=1)
+        fp = (y_prob * (1 - y_true)).sum(dim=1)
+        fn = ((1 - y_prob) * y_true).sum(dim=1)
+
+        precision = tp / (tp + fp + self.smooth)
+        recall = tp / (tp + fn + self.smooth)
+        f1 = 2 * precision * recall / (precision + recall + self.smooth)
+        f1_loss = 1.0 - f1.mean()
+
+        return self.alpha * f1_loss + self.beta * bce_loss
+
+
+
 class GradedMicroF1Loss(nn.Module):
     def __init__(self, smooth=1e-7):
         super().__init__()

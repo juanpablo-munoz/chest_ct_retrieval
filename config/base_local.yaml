@@ -52,6 +52,7 @@ paths:
     embeddings_512: data/DR2156/DR2156_512_resnet18_embeddings
     triplet_runs: runs
     microf1_runs: runs_microf1
+    bce-microf1_runs: runs_bce-microf1
 
 logging:
   log_interval: 1
