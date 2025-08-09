@@ -18,7 +18,7 @@ from utils.logging_utils import TripletLogger
 import logging
 
 class Trainer:
-    def __init__(self, train_loader, val_loader, train_eval_loader, val_eval_loader, train_full_loader, val_full_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, train_full_loader_switch, metrics=[], start_epoch=0, accumulation_steps=1) -> None:
+    def __init__(self, train_loader, val_loader, train_eval_loader, val_eval_loader, train_full_loader, val_full_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, train_full_loader_switch, metrics=[], start_epoch=0, scheduler_resumed=False, accumulation_steps=1) -> None:
         self.last_train_loss = np.inf
         self.best_val_avg_nonzero_triplets = np.inf
         self.last_val_avg_nonzero_triplets = np.inf
@@ -43,6 +43,7 @@ class Trainer:
         self.tensorboard_logs_dir = tensorboard_logs_dir
         self.metrics = metrics
         self.start_epoch = start_epoch
+        self.scheduler_resumed = scheduler_resumed
         self.current_epoch = start_epoch
         self.accumulation_steps = accumulation_steps
         self.tensorboard_writer = SummaryWriter(self.tensorboard_logs_dir)
@@ -68,9 +69,6 @@ class Trainer:
         self.batch_logger = TripletLogger("TripletBatch", logging.DEBUG)
         
         #self.tensorboard_writer.add_graph(self.model)
-        for epoch in range(0, self.start_epoch):
-            scheduler.step()
-            print(f'### SKIPPED EPOCH {epoch+1} ###')
 
     def fit(self):
         """
@@ -82,9 +80,10 @@ class Trainer:
         Siamese network: Siamese loader, siamese model, contrastive loss
         Online triplet learning: batch loader, embedding model, online triplet loss
         """
-        for epoch in range(0, self.start_epoch):
-            self.scheduler.step()
-            print(f'### SKIPPED EPOCH {epoch+1} ###')
+        if not self.scheduler_resumed:
+            for epoch in range(0, self.start_epoch):
+                self.scheduler.step()
+                print(f'### SKIPPED EPOCH {epoch+1} ###')
 
         for epoch in tqdm(range(self.start_epoch, self.n_epochs)):
             self.current_epoch = epoch+1
@@ -135,7 +134,12 @@ class Trainer:
                 epoch_str = "epoch={:03d}".format(self.current_epoch)
                 avg_nonzero_triplets_str = "avg-nonzero-val-triplets={:.1f}".format(round(self.last_val_avg_nonzero_triplets, 1))
                 torch.save(
-                    self.model.state_dict(),
+                    {
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
+                        "scheduler_state_dict": self.scheduler.state_dict(),
+                        "epoch": self.current_epoch,
+                    },
                     os.path.join(self.checkpoint_dir, f'triplets_{timestamp}_{epoch_str}_{metric_str}_{avg_nonzero_triplets_str}.pth'),
                 )
             elif self.current_epoch == self.n_epochs:
@@ -145,7 +149,12 @@ class Trainer:
                 epoch_str = "epoch={:03d}".format(self.current_epoch)
                 avg_nonzero_triplets_str = "avg-nonzero-triplets={:.1f}".format(round(self.last_val_avg_nonzero_triplets, 1))
                 torch.save(
-                    self.model.state_dict(),
+                    {
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
+                        "scheduler_state_dict": self.scheduler.state_dict(),
+                        "epoch": self.current_epoch,
+                    },
                     os.path.join(self.checkpoint_dir, f'triplets_{timestamp}_{epoch_str}_{metric_str}_{avg_nonzero_triplets_str}.pth'),
                 )
 
@@ -180,7 +189,7 @@ class Trainer:
             all_labels = []
             margin = self.loss_fn.margin
             negative_compatibles_dict = self.loss_fn.negative_compatibles_dict
-            eval_loss_fn = OnlineTripletLoss(margin, HardestNegativeTripletSelector(margin, self.label_vector_helper), negative_compatibles_dict, print_interval=0)
+            eval_loss_fn = OnlineTripletLoss(margin, SemihardNegativeTripletSelector(margin, self.label_vector_helper), negative_compatibles_dict, print_interval=0)
             
             
             self.trainer_logger.logger.info('Extracting pre-epoch training set embeddings')
@@ -442,7 +451,7 @@ class Trainer:
             all_labels = []
             margin = self.loss_fn.margin
             negative_compatibles_dict = self.loss_fn.negative_compatibles_dict
-            eval_loss_fn = OnlineTripletLoss(margin, HardestNegativeTripletSelector(margin, self.label_vector_helper), negative_compatibles_dict, print_interval=0)
+            eval_loss_fn = OnlineTripletLoss(margin, SemihardNegativeTripletSelector(margin, self.label_vector_helper), negative_compatibles_dict, print_interval=0)
 
             self.trainer_logger.logger.info('Extracting training set embeddings')
             with torch.no_grad():
@@ -530,7 +539,7 @@ class Trainer:
         all_labels = []
         margin = self.loss_fn.margin
         negative_compatibles_dict = self.loss_fn.negative_compatibles_dict
-        eval_loss_fn = OnlineTripletLoss(margin, HardestNegativeTripletSelector(margin, self.label_vector_helper), negative_compatibles_dict, print_interval=0)
+        eval_loss_fn = OnlineTripletLoss(margin, SemihardNegativeTripletSelector(margin, self.label_vector_helper), negative_compatibles_dict, print_interval=0)
         
 
         self.trainer_logger.logger.info('Extracting validation set embeddings')

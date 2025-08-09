@@ -12,12 +12,12 @@ loss:
 
 training:
   seed: 0
-  n_epochs: 60
+  n_epochs: 70
   augmentations: True
   batch:
     n_classes: 2
     n_samples: 12
-    batch_size: 8
+    batch_size: 24
   optimizer:
     type: adam
     lr: 1e-5

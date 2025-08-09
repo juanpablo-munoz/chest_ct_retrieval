@@ -15,7 +15,7 @@ import torch.nn.functional as F
 from utils.transforms import RandomGaussianNoise3D
 
 class Trainer:
-    def __init__(self, train_loader, train_eval_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, metrics=[], start_epoch=0, accumulation_steps=1) -> None:
+    def __init__(self, train_loader, train_eval_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, metrics=[], start_epoch=0, scheduler_resumed=False, accumulation_steps=1) -> None:
         self.last_train_loss = np.inf
         self.best_val_loss = np.inf
         self.val_map_at_k = []
@@ -35,6 +35,7 @@ class Trainer:
         self.metrics = metrics
         self.start_epoch = start_epoch
         self.current_epoch = start_epoch
+        self.scheduler_resumed = scheduler_resumed
         self.accumulation_steps = accumulation_steps
         self.tensorboard_writer = SummaryWriter(self.tensorboard_logs_dir)
         self.tensorboard_writer.add_hparams
@@ -49,10 +50,6 @@ class Trainer:
             data_keys=["input"]
         ).to("cuda")
 
-        #self.tensorboard_writer.add_graph(self.model)
-        for epoch in range(0, self.start_epoch):
-            scheduler.step()
-            print(f'### SKIPPED EPOCH {epoch+1} ###')
 
     def fit(self):
         """
@@ -64,9 +61,10 @@ class Trainer:
         Siamese network: Siamese loader, siamese model, contrastive loss
         Online triplet learning: batch loader, embedding model, online triplet loss
         """
-        for epoch in range(0, self.start_epoch):
-            self.scheduler.step()
-            print(f'### SKIPPED EPOCH {epoch+1} ###')
+        if not self.scheduler_resumed:
+            for epoch in range(0, self.start_epoch):
+                self.scheduler.step()
+                print(f'### SKIPPED EPOCH {epoch+1} ###')
 
         for epoch in tqdm(range(self.start_epoch, self.n_epochs)):
             self.current_epoch = epoch+1

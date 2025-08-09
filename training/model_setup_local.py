@@ -16,7 +16,7 @@ def initialize_model_triplets(embedding_size, margin, lr, weight_decay, negative
 
     loss_fn = OnlineTripletLoss(
         margin=margin,
-        triplet_selector=HardestNegativeTripletSelector(margin, label_vector_helper),
+        triplet_selector=SemihardNegativeTripletSelector(margin, label_vector_helper),
         negative_compatibles_dict=negative_compatibles_dict,
         print_interval=print_interval,
     )
