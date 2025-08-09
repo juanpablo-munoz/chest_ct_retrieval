@@ -93,7 +93,7 @@ class Trainer:
                 if "mAP@k" in metric.name():
                     k = 10
                     self.val_map_at_k.append(metric.value()['mean_average_precision'][k])
-                if metric.name() == "f1":
+                if "f1" in metric.name():
                     self.val_micro_f1.append(metric.value())
                     
                 print(message)
@@ -111,7 +111,12 @@ class Trainer:
                 timestamp = datetime.now().strftime('%Y%m%d')
                 epoch_str = "epoch={:03d}".format(self.current_epoch)
                 torch.save(
-                    self.model.state_dict(),
+                    {
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
+                        "scheduler_state_dict": self.scheduler.state_dict(),
+                        "epoch": self.current_epoch,
+                    },
                     os.path.join(self.checkpoint_dir, f'microf1_{timestamp}_{epoch_str}_{metric_str}.pth'),
                 )
             elif self.val_map_at_k and self.val_map_at_k[-1] == max(self.val_map_at_k):
@@ -123,7 +128,12 @@ class Trainer:
                 timestamp = datetime.now().strftime('%Y%m%d')
                 epoch_str = "epoch={:03d}".format(self.current_epoch)
                 torch.save(
-                    self.model.state_dict(),
+                    {
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
+                        "scheduler_state_dict": self.scheduler.state_dict(),
+                        "epoch": self.current_epoch,
+                    },
                     os.path.join(self.checkpoint_dir, f'microf1_{timestamp}_{epoch_str}_{metric_str}.pth'),
                 )
             
