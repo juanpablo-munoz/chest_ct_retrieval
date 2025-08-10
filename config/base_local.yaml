@@ -23,8 +23,8 @@ training:
     lr: 1e-5
     weight_decay: 1e-4
   scheduler:
-    step_size: 50
-    gamma: 0.1
+    step_size: 10
+    gamma: 0.5
   metrics:
     loss: True
     average_nonzero_triplets: True

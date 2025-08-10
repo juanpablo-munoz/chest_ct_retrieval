@@ -93,8 +93,8 @@ class Trainer:
                 if "mAP@k" in metric.name():
                     k = 10
                     self.val_map_at_k.append(metric.value()['mean_average_precision'][k])
-                if "f1" in metric.name():
-                    self.val_micro_f1.append(metric.value())
+                if "F1@k" in metric.name():
+                    self.val_micro_f1.append(metric.value()['f1'][k])
                     
                 print(message)
                 if(dict_metric):

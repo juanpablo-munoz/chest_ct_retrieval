@@ -40,6 +40,7 @@ class Proximity100x100(nn.Module):
 
         self.potential_fc_layer_sizes = [4096, 2048]
         self.fc_layer_sizes = [self.bound_layer_size(l) for l in self.potential_fc_layer_sizes]
+        #self.embedding_to_classification_sizes = [self.embedding_size, 128, 32, 8]
 
         self.fc = nn.Sequential(
             nn.Linear(self.flattened_size, self.fc_layer_sizes[0], bias=False),
@@ -54,6 +55,16 @@ class Proximity100x100(nn.Module):
         if self.task == "classification":
             if self.num_classes is None:
                 raise ValueError("num_classes must be specified for classification task")
+            
+            # layers = []
+            # for layer_size_in, layer_size_out in zip(self.embedding_to_classification_sizes[:-1], self.embedding_to_classification_sizes[1:]):
+            #     layers.append(nn.Linear(layer_size_in, layer_size_out, bias=True))
+            #     layers.append(nn.ReLU(True))
+            #     layers.append(nn.Dropout(0.5))
+            # layers.append(
+            #     nn.Linear(self.embedding_to_classification_sizes[-1], self.num_classes, bias=True),
+            # )
+            # self.classifier = nn.Sequential(*layers)
             self.classifier = nn.Linear(self.embedding_size, self.num_classes, bias=True)
 
     def _calculate_flattened_size(self, input_shape):

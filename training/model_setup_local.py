@@ -47,6 +47,6 @@ def initialize_model_bce_micro_f1(embedding_size, lr, weight_decay, y_true_all, 
     loss_fn = HybridBCEGradedMicroF1Loss(y_true_all, alpha=0.5, beta=0.5, smooth=1e-7)
 
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
+    scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
 
     return model, loss_fn, optimizer, scheduler

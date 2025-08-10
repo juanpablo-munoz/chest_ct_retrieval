@@ -1165,16 +1165,20 @@ class AllMetrics(Metric):
         for i, class_is_queried in enumerate(query_vector):
             if class_is_queried == 0:
                 continue
+            sum_dcg_at_k = [np.sum(dcg_at_k[:k, i]) for k in k_top]
+            sum_ideal_dcg_at_k = [np.sum(ideal_dcg_at_k[:k, i]) for k in k_top]
             # current_class := class name
             current_class = self.classes_list[i] 
-            per_class_ndcg[current_class] = {k_original: np.sum(dcg_at_k[:k, i])/max(1., np.sum(ideal_dcg_at_k[:k, i])) for k, k_original in zip(k_top, self.k)}
+            per_class_ndcg[current_class] = {k_original: sum_dcg_at_k[k]/max(1, sum_dcg_at_k[k], sum_ideal_dcg_at_k[k]) for k, k_original in enumerate(self.k)}
         return per_class_ndcg
 
     def calculate_ndcg(self, relevances, ideal_relevances):
         k_top = [min(k, len(relevances)) for k in self.k]
         dcg_at_k = np.array([relevances[i]/np.log2((i+1)+1) for i in range(max(k_top))])
         ideal_dcg_at_k = np.array([ideal_relevances[i]/np.log2((i+1)+1) for i in range(max(k_top))])
-        ndcg_at_k = {k_original: np.sum(dcg_at_k[:k])/max(1., np.sum(ideal_dcg_at_k[:k])) for k, k_original in zip(k_top, self.k)}
+        sum_dcg_at_k = [np.sum(dcg_at_k[:k]) for k in k_top]
+        sum_ideal_dcg_at_k = [np.sum(ideal_dcg_at_k[:k]) for k in k_top]
+        ndcg_at_k = {k_original: sum_dcg_at_k[k]/max(1, sum_dcg_at_k[k], sum_ideal_dcg_at_k[k]) for k, k_original in enumerate(self.k)}
         return ndcg_at_k
     
     def compute_f1_scores(self, preds: np.ndarray, targets: np.ndarray):
