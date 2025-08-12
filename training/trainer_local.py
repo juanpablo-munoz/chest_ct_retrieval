@@ -53,9 +53,6 @@ class Trainer:
 
         self.label_vector_helper = LabelVectorHelper()
 
-        self.train_embeddings = None
-        self.train_labels = None
-        
         # Add GPU augmentation pipeline similar to micro-F1 training
         self.apply_gpu_aug = True
         self.gpu_aug = K.AugmentationSequential(
@@ -179,7 +176,7 @@ class Trainer:
         epoch_n_triplets = []
         epoch_n_nonzero_triplets = []
         total_batches = 0
-        activation_conditions = len(self.avg_nonzero_triplets) >= 50 and np.array(self.avg_nonzero_triplets[-5:]).mean() < 3.0
+        activation_conditions = len(self.avg_nonzero_triplets) >= 100 and np.array(self.avg_nonzero_triplets[-3:]).mean() < 0.2
         if self.train_full_loader_switch or activation_conditions:
             print(f'\n### NOW FINDING TRIPLETS ACROSS COMPLETE TRAINING DATASET ###')
             self.trainer_logger.logger.info('Switching to full dataset triplet mining mode')
@@ -240,8 +237,8 @@ class Trainer:
             n_train_batches = min(30, len(self.train_full_loader))
             
             avg_nonzero = round(np.array(self.avg_nonzero_triplets[-5:]).mean(), 1)
-            print(f'Last epoch got training loss of {round(self.last_train_loss, 4)} and last 5 epochs got an average of {avg_nonzero} non-zero triplets.')
-            self.trainer_logger.logger.info(f'Last training loss: {self.last_train_loss:.4f}, avg nonzero triplets (last 5 epochs): {avg_nonzero}')
+            print(f'Last epoch got training loss of {round(self.last_train_loss.item(), 4)} and last 3 epochs got an average of {avg_nonzero} non-zero triplets.')
+            self.trainer_logger.logger.info(f'Last training loss: {self.last_train_loss:.4f}, avg nonzero triplets (last 3 epochs): {avg_nonzero}')
             
             print('Pre-epoch triplet-loss on train dataset:', round(pre_epoch_mean_train_loss.item(), 4))
             print('Non-zero triplets on train dataset:', len(pre_epoch_train_triplets))
@@ -343,7 +340,7 @@ class Trainer:
                         None,
                         train_labels.cpu(),
                         in_epoch_mean_train_loss,
-                        epoch_n_nonzero_triplets,
+                        epoch_n_nonzero_triplets/epoch_n_triplets,
                         self.tensorboard_writer,
                         training=True,
                     )
@@ -413,7 +410,7 @@ class Trainer:
                 
                 
                 # Log batch results with structured logger  
-                if total_batches % 10 == 0:  # Log every 10th batch to avoid spam
+                if total_batches % 5 == 0:  # Log every 10th batch to avoid spam
                     self.batch_logger.logger.info(f'Regular mode - Batch {total_batches}/{len(self.train_loader)}: Loss={loss.item():.6f}, Triplets={n_triplets}, Non-zero triplets: {n_nonzero_triplets}')
                 
                 losses.append(loss.item())
@@ -517,7 +514,7 @@ class Trainer:
                         None,# predicted labels
                         self.train_labels,      # Use same for both query and db
                         post_epoch_mean_train_loss.item(),
-                        [n_nonzero_triplets],  # No triplets
+                        np.repeat(n_nonzero_triplets/len(train_epoch_triplets), len(train_epoch_triplets)),  
                         self.tensorboard_writer,
                         training=True,
                     )
@@ -537,6 +534,9 @@ class Trainer:
 
         all_embeddings = []
         all_labels = []
+        batch_n_triplets = []
+        batch_n_nonzero_triplets = []
+        total_batches = 0
         margin = self.loss_fn.margin
         negative_compatibles_dict = self.loss_fn.negative_compatibles_dict
         eval_loss_fn = OnlineTripletLoss(margin, SemihardNegativeTripletSelector(margin, self.label_vector_helper), negative_compatibles_dict, print_interval=0)
@@ -545,6 +545,8 @@ class Trainer:
         self.trainer_logger.logger.info('Extracting validation set embeddings')
         with torch.no_grad():
             for data, target in tqdm(self.val_eval_loader):
+                total_batches += 1
+
                 target = target if len(target) > 0 else None
                 
                 if self.cuda:
@@ -605,7 +607,7 @@ class Trainer:
                     None,
                     self.val_labels.cpu(),
                     post_epoch_mean_val_loss.item(),
-                    [n_nonzero_triplets],
+                    np.repeat(n_nonzero_triplets/len(val_epoch_triplets), len(val_epoch_triplets)),
                     self.tensorboard_writer,
                     training=False,
                 )

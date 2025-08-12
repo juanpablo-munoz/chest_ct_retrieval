@@ -74,6 +74,9 @@ def run_triplet_training(cfg, cuda_available, cuda_device=None,
             p_scheduler.load_state_dict(state["scheduler_state_dict"])
             scheduler_resumed = True
         print(f"Resumed from checkpoint: {resume_ckpt}")
+    
+    # Change model task
+    p_model.task = 'embedding'
 
     # Create loaders
     loaders = create_loaders(

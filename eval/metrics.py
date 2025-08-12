@@ -210,7 +210,7 @@ class AverageNonzeroTripletsMetric(Metric):
         self.values = []
 
     def value(self):
-        return round(np.mean(self.values), 1)
+        return round(np.mean(self.values), 2)
 
     def name(self):
         return 'Average nonzero triplets'
@@ -232,7 +232,7 @@ class TotalNonzeroTripletsMetric(Metric):
         self.values = []
 
     def value(self):
-        return np.sum(self.values)
+        return int(np.sum(self.values))
 
     def name(self):
         return 'Total nonzero triplets'

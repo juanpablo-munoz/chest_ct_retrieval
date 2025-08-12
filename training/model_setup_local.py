@@ -8,7 +8,7 @@ from datasets.base import LabelVectorHelper
 
 def initialize_model_triplets(embedding_size, margin, lr, weight_decay, negative_compatibles_dict, print_interval, cuda):
     """Initialize Proximity100x100 model in embedding mode for triplet training with optimized configuration"""
-    model = Proximity100x100(embedding_size=embedding_size, num_classes=None, task='embedding')
+    model = Proximity100x100(embedding_size=embedding_size, num_classes=4, task='classification')
     if cuda:
         model.cuda()
 
@@ -23,7 +23,7 @@ def initialize_model_triplets(embedding_size, margin, lr, weight_decay, negative
 
     # Use same optimizer configuration as micro-F1 training for consistency
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
+    scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.2)
 
     return model, loss_fn, optimizer, scheduler
 
