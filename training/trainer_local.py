@@ -9,7 +9,8 @@ import json
 from datetime import datetime
 from utils.embedding import extract_embeddings
 from utils.selectors import HardestNegativeTripletSelector, SemihardNegativeTripletSelector
-from losses.losses import OnlineTripletLoss
+from datasets.base import LabelVectorHelper
+from losses.losses_local import OnlineTripletLoss
 import torch.nn.functional as F
 import kornia.augmentation as K
 from utils.transforms import RandomGaussianNoise3D
@@ -17,7 +18,7 @@ from utils.logging_utils import TripletLogger
 import logging
 
 class Trainer:
-    def __init__(self, train_loader, val_loader, train_eval_loader, val_eval_loader, train_full_loader, val_full_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, train_full_loader_switch, metrics=[], start_epoch=0, accumulation_steps=1) -> None:
+    def __init__(self, train_loader, val_loader, train_eval_loader, val_eval_loader, train_full_loader, val_full_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, train_full_loader_switch, metrics=[], start_epoch=0, scheduler_resumed=False, accumulation_steps=1) -> None:
         self.last_train_loss = np.inf
         self.best_val_avg_nonzero_triplets = np.inf
         self.last_val_avg_nonzero_triplets = np.inf
@@ -42,13 +43,16 @@ class Trainer:
         self.tensorboard_logs_dir = tensorboard_logs_dir
         self.metrics = metrics
         self.start_epoch = start_epoch
+        self.scheduler_resumed = scheduler_resumed
         self.current_epoch = start_epoch
         self.accumulation_steps = accumulation_steps
         self.tensorboard_writer = SummaryWriter(self.tensorboard_logs_dir)
         self.tensorboard_writer.add_hparams
         self.use_amp = self.cuda
         self.scaler = GradScaler(enabled=self.use_amp)
-        
+
+        self.label_vector_helper = LabelVectorHelper()
+
         # Add GPU augmentation pipeline similar to micro-F1 training
         self.apply_gpu_aug = True
         self.gpu_aug = K.AugmentationSequential(
@@ -62,9 +66,6 @@ class Trainer:
         self.batch_logger = TripletLogger("TripletBatch", logging.DEBUG)
         
         #self.tensorboard_writer.add_graph(self.model)
-        for epoch in range(0, self.start_epoch):
-            scheduler.step()
-            print(f'### SKIPPED EPOCH {epoch+1} ###')
 
     def fit(self):
         """
@@ -76,9 +77,10 @@ class Trainer:
         Siamese network: Siamese loader, siamese model, contrastive loss
         Online triplet learning: batch loader, embedding model, online triplet loss
         """
-        for epoch in range(0, self.start_epoch):
-            self.scheduler.step()
-            print(f'### SKIPPED EPOCH {epoch+1} ###')
+        if not self.scheduler_resumed:
+            for epoch in range(0, self.start_epoch):
+                self.scheduler.step()
+                print(f'### SKIPPED EPOCH {epoch+1} ###')
 
         for epoch in tqdm(range(self.start_epoch, self.n_epochs)):
             self.current_epoch = epoch+1
@@ -129,7 +131,12 @@ class Trainer:
                 epoch_str = "epoch={:03d}".format(self.current_epoch)
                 avg_nonzero_triplets_str = "avg-nonzero-val-triplets={:.1f}".format(round(self.last_val_avg_nonzero_triplets, 1))
                 torch.save(
-                    self.model.state_dict(),
+                    {
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
+                        "scheduler_state_dict": self.scheduler.state_dict(),
+                        "epoch": self.current_epoch,
+                    },
                     os.path.join(self.checkpoint_dir, f'triplets_{timestamp}_{epoch_str}_{metric_str}_{avg_nonzero_triplets_str}.pth'),
                 )
             elif self.current_epoch == self.n_epochs:
@@ -139,7 +146,12 @@ class Trainer:
                 epoch_str = "epoch={:03d}".format(self.current_epoch)
                 avg_nonzero_triplets_str = "avg-nonzero-triplets={:.1f}".format(round(self.last_val_avg_nonzero_triplets, 1))
                 torch.save(
-                    self.model.state_dict(),
+                    {
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
+                        "scheduler_state_dict": self.scheduler.state_dict(),
+                        "epoch": self.current_epoch,
+                    },
                     os.path.join(self.checkpoint_dir, f'triplets_{timestamp}_{epoch_str}_{metric_str}_{avg_nonzero_triplets_str}.pth'),
                 )
 
@@ -158,32 +170,80 @@ class Trainer:
         self.optimizer.zero_grad()
         losses = []
         total_loss = 0
+        in_epoch_train_embeddings = []
         post_epoch_train_embeddings = []
         train_labels = []
         epoch_n_triplets = []
+        epoch_n_nonzero_triplets = []
         total_batches = 0
-        activation_conditions = len(self.avg_nonzero_triplets) >= 5 and np.array(self.avg_nonzero_triplets[-5:]).mean() < 5.0
+        activation_conditions = len(self.avg_nonzero_triplets) >= 100 and np.array(self.avg_nonzero_triplets[-3:]).mean() < 0.2
         if self.train_full_loader_switch or activation_conditions:
-            self.train_full_loader_switch = True # from this epoch onward, train from triplets mined over the full training dataset
-            self.model.eval()
-            margin = self.loss_fn.margin
-            negative_compatibles_dict = self.loss_fn.negative_compatibles_dict
-            eval_loss_fn = OnlineTripletLoss(margin, SemihardNegativeTripletSelector(margin), negative_compatibles_dict, print_interval=0)
-            pre_epoch_embeddings, labels = extract_embeddings(self.train_eval_loader, self.model)
-            true_loss_outputs, pre_epoch_triplets = eval_loss_fn(query_embeddings=pre_epoch_embeddings, query_target=labels, db_embeddings=pre_epoch_embeddings, db_target=labels)
-            train_batches = self.train_full_loader.generate_batches_from_triplets(pre_epoch_triplets)
-            n_train_batches = min(30, len(self.train_full_loader))
             print(f'\n### NOW FINDING TRIPLETS ACROSS COMPLETE TRAINING DATASET ###')
             self.trainer_logger.logger.info('Switching to full dataset triplet mining mode')
+            self.train_full_loader_switch = True # from this epoch onward, train from triplets mined over the full training dataset
+            self.model.eval()
+            pre_epoch_embeddings = []
+            all_labels = []
+            margin = self.loss_fn.margin
+            negative_compatibles_dict = self.loss_fn.negative_compatibles_dict
+            eval_loss_fn = OnlineTripletLoss(margin, SemihardNegativeTripletSelector(margin, self.label_vector_helper), negative_compatibles_dict, print_interval=0)
+            
+            
+            self.trainer_logger.logger.info('Extracting pre-epoch training set embeddings')
+            with torch.no_grad():
+                for data, target in tqdm(self.train_eval_loader):
+                    target = target if len(target) > 0 else None
+                    
+                    if self.cuda:
+                        data = data.cuda()
+                        if target is not None:
+                            target = target.cuda()
+                    
+                    # Extract embeddings using the model's get_embeddings method with autocast
+                    with autocast('cuda', enabled=self.use_amp):
+
+                        # shape: [B, D, 1, H, W] → [B, 1, D, H, W]
+                        data = data.permute(0, 2, 1, 3, 4)
+
+                        if data.size()[-2] > self.model.input_H:  
+                            data = F.interpolate(
+                                data,
+                                size=[data.size()[-3], self.model.input_H, self.model.input_W],
+                                mode='trilinear',
+                                align_corners=False
+                            )
+
+                        # Back to [B, D, 1, H, W] if needed downstream
+                        data = data.permute(0, 2, 1, 3, 4)
+
+                        embeddings = self.model.get_embeddings(data, use_autocast=True)
+                    
+                    pre_epoch_embeddings.append(embeddings.cpu())
+                    all_labels.append(target.cpu())
+            
+                    if len(all_labels) >= np.inf: # Early stopping for debugging
+                        break
+                
+            # Concatenate all embeddings and labels for metrics calculation
+            if pre_epoch_embeddings and all_labels:
+                pre_epoch_embeddings = torch.cat(pre_epoch_embeddings, dim=0)
+                all_labels = torch.cat(all_labels, dim=0)
+            
+            self.trainer_logger.logger.info(f'Now getting losses and triplets from {len(pre_epoch_embeddings)} pre-epoch embeddings.')
+            pre_epoch_mean_train_loss, pre_epoch_train_triplets, n_nonzero_triplets = eval_loss_fn(query_embeddings=pre_epoch_embeddings, query_target=all_labels, db_embeddings=pre_epoch_embeddings, db_target=all_labels)
+            
+            self.trainer_logger.logger.info(f'Now generating batches from {len(pre_epoch_train_triplets)} found triplets.')
+            train_batches = self.train_full_loader.generate_batches_from_triplets(pre_epoch_train_triplets)
+            n_train_batches = min(30, len(self.train_full_loader))
             
             avg_nonzero = round(np.array(self.avg_nonzero_triplets[-5:]).mean(), 1)
-            print(f'Last epoch got training loss of {round(self.last_train_loss, 4)} and last 5 epochs got an average of {avg_nonzero} non-zero triplets.')
-            self.trainer_logger.logger.info(f'Last training loss: {self.last_train_loss:.4f}, avg nonzero triplets (last 5 epochs): {avg_nonzero}')
+            print(f'Last epoch got training loss of {round(self.last_train_loss.item(), 4)} and last 3 epochs got an average of {avg_nonzero} non-zero triplets.')
+            self.trainer_logger.logger.info(f'Last training loss: {self.last_train_loss:.4f}, avg nonzero triplets (last 3 epochs): {avg_nonzero}')
             
-            print('True triplet-loss on train dataset:', round(true_loss_outputs.item(), 4))
-            print('Non-zero triplets on train dataset:', len(pre_epoch_triplets))
+            print('Pre-epoch triplet-loss on train dataset:', round(pre_epoch_mean_train_loss.item(), 4))
+            print('Non-zero triplets on train dataset:', len(pre_epoch_train_triplets))
             print(f'Training on a sample of {n_train_batches} batches')
-            self.trainer_logger.logger.info(f'Pre-epoch triplet stats - Loss: {true_loss_outputs.item():.4f}, Triplets found: {len(pre_epoch_triplets)}, Batch sample size: {n_train_batches}')
+            self.trainer_logger.logger.info(f'Pre-epoch triplet stats - Loss: {pre_epoch_mean_train_loss.item():.4f}, Triplets found: {len(pre_epoch_train_triplets)}, Non-zero triplets: {n_nonzero_triplets}, Batch sample size: {n_train_batches}')
 
             self.model.train()
             self.optimizer.zero_grad()
@@ -207,25 +267,27 @@ class Trainer:
                     if self.apply_gpu_aug:
                         data = self.gpu_aug(data)
                         
-                    data = F.interpolate(
-                        data,
-                        size=[data.size()[-3], self.model.input_H, self.model.input_W],
-                        mode='trilinear',
-                        align_corners=False
-                    )
+                    if data.size()[-2] > self.model.input_H:
+                        data = F.interpolate(
+                            data,
+                            size=[data.size()[-3], self.model.input_H, self.model.input_W],
+                            mode='trilinear',
+                            align_corners=False
+                        )
                     data = data.permute(0, 2, 1, 3, 4)  # Back to [B, D, 1, H, W]
                     
                     outputs = self.model(data)
                     
-                    print(f'\n### BATCH {total_batches} TRAINING LOSS ###')
-                    print(f'Batch labels: {target}')
+                    print(f'\n### BATCH {total_batches} OF {n_train_batches} ###')
+                    #print(f'Batch labels: {target}')
                     loss_outputs = self.loss_fn(query_embeddings=outputs, query_target=target, db_embeddings=outputs, db_target=target)
                     #print('train_epoch.loss_outputs', loss_outputs)
                     if type(loss_outputs) in (tuple, list):
-                        loss, triplets = loss_outputs
+                        loss, triplets, n_nonzero_triplets = loss_outputs
                     else:
                         loss = loss_outputs
                         triplets = []
+                        n_nonzero_triplets = 0
                 
                 # Scale loss by accumulation steps
                 loss = loss / self.accumulation_steps
@@ -236,19 +298,18 @@ class Trainer:
                     loss.backward()
                 
                 n_triplets = len(triplets)
-                print('loss:', loss)
-                print('n_triplets:', round(n_triplets, 1))
-                
+
                 # Log batch results with structured logger
                 if total_batches % 5 == 0:  # Log every 5th batch to avoid spam
-                    self.batch_logger.logger.info(f'Full dataset mode - Batch {total_batches}: Loss={loss.item():.6f}, Triplets={n_triplets}')
+                    self.batch_logger.logger.info(f'Full dataset mode - Batch {total_batches}: Loss={loss.item():.6f}, Triplets={n_triplets}, Non-zero triplets: {n_nonzero_triplets}')
                 
                 losses.append(loss.item())
                 total_loss += loss.item()
 
-                post_epoch_train_embeddings.append(outputs)
+                in_epoch_train_embeddings.append(outputs)
                 train_labels.append(target)
                 epoch_n_triplets.append(n_triplets)
+                epoch_n_nonzero_triplets.append(n_nonzero_triplets)
                 
                 # Perform optimizer step only when accumulation_counter reaches accumulation_steps
                 if accumulation_counter % self.accumulation_steps == 0:
@@ -258,34 +319,37 @@ class Trainer:
                     else:
                         self.optimizer.step()
                     self.optimizer.zero_grad()
+                
+                if len(train_labels) >= np.inf: # Early stopping for debugging
+                        break
             
-            post_epoch_train_embeddings = torch.cat(post_epoch_train_embeddings, dim=0)
+            in_epoch_train_embeddings = torch.cat(in_epoch_train_embeddings, dim=0)
             train_labels = torch.cat(train_labels, dim=0)
-            #print('epoch_predictions:', epoch_predictions)
-            #print('epoch_targets:', epoch_targets)
-            mean_train_loss = total_loss
+            
+            self.train_embeddings = in_epoch_train_embeddings.cpu()
+            self.train_labels = train_labels.cpu()
+            
+            in_epoch_mean_train_loss = float(np.mean(losses))
             for metric in self.metrics:
                 with torch.no_grad():
                     metric(
                         self.current_epoch,
-                        post_epoch_train_embeddings.cpu(),
+                        in_epoch_train_embeddings.cpu(),
                         train_labels.cpu(),
-                        post_epoch_train_embeddings.cpu(),
+                        in_epoch_train_embeddings.cpu(),
+                        None,
                         train_labels.cpu(),
-                        mean_train_loss,
-                        epoch_n_triplets,
+                        in_epoch_mean_train_loss,
+                        epoch_n_nonzero_triplets/epoch_n_triplets,
                         self.tensorboard_writer,
                         training=True,
                     )
-            return mean_train_loss, self.metrics
+            return in_epoch_mean_train_loss, self.metrics
         else:
             self.model.train()
             self.optimizer.zero_grad()
             #for data, target in self.train_loader:
             total_loss = 0.0
-            resnet_total_loss_grad = 0.0
-            reducingconvs_total_loss_grad = 0.0
-            fc_total_loss_grad = 0.0
             accumulation_counter = 0
             for data, target in tqdm(self.train_loader):
                 total_batches += 1
@@ -310,27 +374,29 @@ class Trainer:
                         if self.apply_gpu_aug:
                             data = self.gpu_aug(data)
                             
-                        data = F.interpolate(
-                            data,
-                            size=[data.size()[-3], self.model.input_H, self.model.input_W],
-                            mode='trilinear',
-                            align_corners=False
-                        )
+                        if data.size()[-2] > self.model.input_H:
+                            data = F.interpolate(
+                                data,
+                                size=[data.size()[-3], self.model.input_H, self.model.input_W],
+                                mode='trilinear',
+                                align_corners=False
+                            )
                         data = data.permute(0, 2, 1, 3, 4)  # Back to [B, D, 1, H, W]
                         outputs = self.model(data)
                     else:
                         # Tuple input - preserve existing behavior
                         outputs = self.model(*data)
                     
-                    print(f'\n### BATCH {total_batches} OF {len(self.train_loader)} TRAINING LOSS ###')
-                    print(f'Batch labels: {target}')
+                    print(f'\n### BATCH {total_batches} OF {len(self.train_loader)} ###')
+                    #print(f'Batch labels: {target}')
                     loss_outputs = self.loss_fn(query_embeddings=outputs, query_target=target, db_embeddings=outputs, db_target=target)
                     #print('train_epoch.loss_outputs', loss_outputs)
                     if type(loss_outputs) in (tuple, list):
-                        loss, triplets = loss_outputs
+                        loss, triplets, n_nonzero_triplets = loss_outputs
                     else:
                         loss = loss_outputs
                         triplets = []
+                        n_nonzero_triplets = 0
                 
                 # Scale loss by accumulation steps
                 loss = loss / self.accumulation_steps
@@ -341,27 +407,19 @@ class Trainer:
                     loss.backward()
                 
                 n_triplets = len(triplets)
-                print('loss:', loss)
-                print('n_triplets:', round(n_triplets, 1))
+                
                 
                 # Log batch results with structured logger  
-                if total_batches % 10 == 0:  # Log every 10th batch to avoid spam
-                    self.batch_logger.logger.info(f'Regular mode - Batch {total_batches}/{len(self.train_loader)}: Loss={loss.item():.6f}, Triplets={n_triplets}')
+                if total_batches % 5 == 0:  # Log every 10th batch to avoid spam
+                    self.batch_logger.logger.info(f'Regular mode - Batch {total_batches}/{len(self.train_loader)}: Loss={loss.item():.6f}, Triplets={n_triplets}, Non-zero triplets: {n_nonzero_triplets}')
                 
                 losses.append(loss.item())
                 total_loss += loss.item()
 
-                # Gradients of layers of interest with respect to the trainig loss
-                # resnet_loss_grad, *_ =  self.model.features[0].weight.grad.data
-                # resnet_total_loss_grad += resnet_loss_grad
-                # reducingconvs_loss_grad, *_ =  self.model.reducingconvs[0].weight.grad.data
-                # reducingconvs_total_loss_grad += reducingconvs_loss_grad
-                # fc_loss_grad, *_ =  self.model.fc[0].weight.grad.data
-                # fc_total_loss_grad += fc_loss_grad
-
-                post_epoch_train_embeddings.append(outputs)
+                in_epoch_train_embeddings.append(outputs)
                 train_labels.append(target)
                 epoch_n_triplets.append(n_triplets)
+                epoch_n_nonzero_triplets.append(n_nonzero_triplets)
 
                 # Perform optimizer step only when accumulation_counter reaches accumulation_steps
                 if accumulation_counter % self.accumulation_steps == 0:
@@ -373,86 +431,185 @@ class Trainer:
                     self.optimizer.zero_grad()
 
                 # early epoch stop
-                #if total_batches >= 10:
-                if total_batches >= np.inf:
+                if total_batches >= np.inf: # early stop for debugging
                     break
             
-            post_epoch_train_embeddings = torch.cat(post_epoch_train_embeddings, dim=0)
+            in_epoch_train_embeddings = torch.cat(in_epoch_train_embeddings, dim=0)
             train_labels = torch.cat(train_labels, dim=0)
-            #print('post_epoch_train_embeddings:', post_epoch_train_embeddings)
-            #print('train_labels:', train_labels)
-            #mean_train_loss = total_loss.item() / len(losses)
-            mean_train_loss = sum(losses) / len(losses)
+
+            in_epoch_mean_train_loss= sum(losses) / len(losses)
+
+            # Now extract embeddings after weights have been updated
+            print('### GETTING TRAINING METRICS ###')
+            self.trainer_logger.logger.info('Starting training metrics computation')
+            print('### GENERATING POST-EPOCH TRAINING SET EMBEDDINGS ###')
+            self.model.eval()
+            all_embeddings = []
+            all_labels = []
+            margin = self.loss_fn.margin
+            negative_compatibles_dict = self.loss_fn.negative_compatibles_dict
+            eval_loss_fn = OnlineTripletLoss(margin, SemihardNegativeTripletSelector(margin, self.label_vector_helper), negative_compatibles_dict, print_interval=0)
+
+            self.trainer_logger.logger.info('Extracting training set embeddings')
+            with torch.no_grad():
+                for data, target in tqdm(self.train_eval_loader):
+                    target = target if len(target) > 0 else None
+                    
+                    if self.cuda:
+                        data = data.cuda()
+                        if target is not None:
+                            target = target.cuda()
+                    
+                    # Extract embeddings using the model's get_embeddings method with autocast
+                    with autocast('cuda', enabled=self.use_amp):
+
+                        # shape: [B, D, 1, H, W] → [B, 1, D, H, W]
+                        data = data.permute(0, 2, 1, 3, 4)
+
+                        if data.size()[-2] > self.model.input_H:  
+                            data = F.interpolate(
+                                data,
+                                size=[data.size()[-3], self.model.input_H, self.model.input_W],
+                                mode='trilinear',
+                                align_corners=False
+                            )
+
+                        # Back to [B, D, 1, H, W] if needed downstream
+                        data = data.permute(0, 2, 1, 3, 4)
+
+                        embeddings = self.model.get_embeddings(data, use_autocast=True)
+                    
+                    all_embeddings.append(embeddings.cpu())
+                    all_labels.append(target.cpu())
             
-            # Gradient monitoring
-            # print('Mean gradient of the first layer weights in the "features" section with respect to the training loss (dW_0/dL):', resnet_total_loss_grad / total_batches)
-            # print('Mean gradient of the first layer weights in the "reducingconvs" with respect to the training loss:', reducingconvs_total_loss_grad / total_batches)
-            # print('Mean gradient of the first layer weights in the "fc" with respect to the training loss:', fc_total_loss_grad / total_batches)
+                    if len(all_labels) >= np.inf: # Early stopping for debugging
+                        break
+                
+            # Concatenate all embeddings and labels for metrics calculation
+            if all_embeddings and all_labels:
+                all_embeddings = torch.cat(all_embeddings, dim=0)
+                all_labels = torch.cat(all_labels, dim=0)
+            
+            
+
+            # Store training embeddings and labels for use in test_epoch
+            self.train_embeddings = all_embeddings.cpu()
+            self.train_labels = all_labels.cpu()
+
+            # Calculate loss using triplet loss
+            print('### EVALUATING LOSS USING TRAIN EMBEDDINGS AS QUERIES ON TRAINING SET EMBEDDINGS ###')
+            self.trainer_logger.logger.info('Computing training loss using training embeddings as queries on training embeddings')
+            post_epoch_mean_train_loss, train_epoch_triplets, n_nonzero_triplets = eval_loss_fn(query_embeddings=self.train_embeddings, query_target=self.train_labels, db_embeddings=self.train_embeddings, db_target=self.train_labels)
+
+            # Log validation results
+            self.trainer_logger.logger.info(f'Training triplet stats - Loss: {post_epoch_mean_train_loss.item():.4f}, Triplets found: {len(train_epoch_triplets)}, Non-zero triplets: {n_nonzero_triplets}')
+
             for metric in self.metrics:
                 with torch.no_grad():
                     metric(
                         self.current_epoch,
-                        post_epoch_train_embeddings.cpu(),
-                        train_labels.cpu(),
-                        post_epoch_train_embeddings.cpu(),
-                        train_labels.cpu(),
-                        mean_train_loss,
-                        epoch_n_triplets,
+                        self.train_embeddings,  # Training embeddings
+                        self.train_labels,      # Training labels
+                        self.train_embeddings,  # Use same for both query and db
+                        None,# predicted labels
+                        self.train_labels,      # Use same for both query and db
+                        post_epoch_mean_train_loss.item(),
+                        np.repeat(n_nonzero_triplets/len(train_epoch_triplets), len(train_epoch_triplets)),  
                         self.tensorboard_writer,
                         training=True,
                     )
-            return mean_train_loss, self.metrics
+            
+            return post_epoch_mean_train_loss, self.metrics
+            
+            
 
 
     def test_epoch(self):
         print('### GETTING VALIDATION METRICS ###')
         self.trainer_logger.logger.info('Starting validation metrics computation')
+        self.model.eval()
+
+        for metric in self.metrics:
+            metric.reset()
+
+        all_embeddings = []
+        all_labels = []
+        batch_n_triplets = []
+        batch_n_nonzero_triplets = []
+        total_batches = 0
+        margin = self.loss_fn.margin
+        negative_compatibles_dict = self.loss_fn.negative_compatibles_dict
+        eval_loss_fn = OnlineTripletLoss(margin, SemihardNegativeTripletSelector(margin, self.label_vector_helper), negative_compatibles_dict, print_interval=0)
+        
+
+        self.trainer_logger.logger.info('Extracting validation set embeddings')
         with torch.no_grad():
-            self.model.eval()
-            for metric in self.metrics:
-                metric.reset()
-            margin = self.loss_fn.margin
-            negative_compatibles_dict = self.loss_fn.negative_compatibles_dict
-            eval_loss_fn = OnlineTripletLoss(margin, SemihardNegativeTripletSelector(margin), negative_compatibles_dict, print_interval=0)
-            print('### GENERATING POST-EPOCH TRAINING SET EMBEDDINGS ###')
-            self.trainer_logger.logger.info('Extracting training set embeddings')
-            post_epoch_train_embeddings, train_labels = extract_embeddings(self.train_eval_loader, self.model)
-            print('### GENERATING POST-EPOCH VALIDATION SET EMBEDDINGS ###')
-            self.trainer_logger.logger.info('Extracting validation set embeddings')
-            post_epoch_val_embeddings, val_labels = extract_embeddings(self.val_eval_loader, self.model)
-            #true_val_loss_outputs, val_epoch_triplets = eval_loss_fn(post_epoch_val_embeddings, val_labels)
+            for data, target in tqdm(self.val_eval_loader):
+                total_batches += 1
+
+                target = target if len(target) > 0 else None
+                
+                if self.cuda:
+                    data = data.cuda()
+                    if target is not None:
+                        target = target.cuda()
+                
+                # Extract embeddings using the model's get_embeddings method with autocast
+                with autocast('cuda', enabled=self.use_amp):
+
+                    # shape: [B, D, 1, H, W] → [B, 1, D, H, W]
+                    data = data.permute(0, 2, 1, 3, 4)
+
+                    if data.size()[-2] > self.model.input_H:  
+                        data = F.interpolate(
+                            data,
+                            size=[data.size()[-3], self.model.input_H, self.model.input_W],
+                            mode='trilinear',
+                            align_corners=False
+                        )
+
+                    # Back to [B, D, 1, H, W] if needed downstream
+                    data = data.permute(0, 2, 1, 3, 4)
+
+                    embeddings = self.model.get_embeddings(data, use_autocast=True)
+                
+                all_embeddings.append(embeddings.cpu())
+                all_labels.append(target.cpu())
+                
+        
+                if len(all_labels) >= np.inf: # Early stopping for debugging
+                    break
+            
+            # Concatenate all embeddings and labels for metrics calculation
+            if all_embeddings and all_labels:
+                all_embeddings = torch.cat(all_embeddings, dim=0)
+                all_labels = torch.cat(all_labels, dim=0)
+            
+            # Store training embeddings and labels for use in test_epoch
+            self.val_embeddings = all_embeddings
+            self.val_labels = all_labels
+
+            # Calculate loss using triplet loss
             print('### EVALUATING LOSS USING VAL EMBEDDINGS AS QUERIES ON TRAINING SET EMBEDDINGS ###')
             self.trainer_logger.logger.info('Computing validation loss using val embeddings as queries on training embeddings')
-            true_val_loss_outputs, val_epoch_triplets = eval_loss_fn(query_embeddings=post_epoch_val_embeddings, query_target=val_labels, db_embeddings=post_epoch_train_embeddings, db_target=train_labels)
-            epoch_predictions = []
-            epoch_targets = []
-            epoch_n_triplets = []
-            loss = true_val_loss_outputs.item()
-            #loss = sum([l.item() for l in true_val_loss_outputs])
-            n_triplets = len(val_epoch_triplets)
-            #n_triplets = sum([len(t) for t in val_epoch_triplets])
-            epoch_targets.append(val_labels)
-            epoch_n_triplets.append(n_triplets)
+            post_epoch_mean_val_loss, val_epoch_triplets, n_nonzero_triplets = eval_loss_fn(query_embeddings=self.val_embeddings, query_target=self.val_labels, db_embeddings=self.train_embeddings, db_target=self.train_labels)
             
             # Log validation results
-            self.trainer_logger.logger.info(f'Validation triplet stats - Loss: {loss:.4f}, Triplets found: {n_triplets}')
-            #epoch_predictions = torch.cat(epoch_predictions, dim=0)
-            epoch_predictions = torch.empty(0)
-            #epoch_targets = torch.cat(epoch_targets, dim=0)
-            epoch_targets = torch.empty(0)
+            self.trainer_logger.logger.info(f'Training triplet stats - Loss: {post_epoch_mean_val_loss:.4f}, Triplets found: {len(val_epoch_triplets)}, Non-zero triplets: {n_nonzero_triplets}')
+
+        
             for metric in self.metrics:
-                with torch.no_grad():
-                    metric(
-                        self.current_epoch,
-                        post_epoch_train_embeddings.cpu(),
-                        train_labels.cpu(),
-                        post_epoch_val_embeddings.cpu(),
-                        val_labels.cpu(),
-                        loss,
-                        epoch_n_triplets,
-                        self.tensorboard_writer,
-                        training=False,
-                    )
-            mean_val_loss = loss
-            self.trainer_logger.logger.info(f'Validation metrics computation completed - Mean loss: {mean_val_loss:.4f}')
-            return mean_val_loss, self.metrics
+                metric(
+                    self.current_epoch,
+                    self.train_embeddings.cpu(),
+                    self.train_labels.cpu(),
+                    self.val_embeddings.cpu(),
+                    None,
+                    self.val_labels.cpu(),
+                    post_epoch_mean_val_loss.item(),
+                    np.repeat(n_nonzero_triplets/len(val_epoch_triplets), len(val_epoch_triplets)),
+                    self.tensorboard_writer,
+                    training=False,
+                )
+            self.trainer_logger.logger.info(f'Validation metrics computation completed - Mean loss: {post_epoch_mean_val_loss.item():.4f}')
+            return post_epoch_mean_val_loss, self.metrics

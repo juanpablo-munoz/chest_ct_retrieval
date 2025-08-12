@@ -15,7 +15,7 @@ import torch.nn.functional as F
 from utils.transforms import RandomGaussianNoise3D
 
 class Trainer:
-    def __init__(self, train_loader, train_eval_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, metrics=[], start_epoch=0, accumulation_steps=1) -> None:
+    def __init__(self, train_loader, train_eval_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs, cuda, log_interval, checkpoint_dir, tensorboard_logs_dir, metrics=[], start_epoch=0, scheduler_resumed=False, accumulation_steps=1) -> None:
         self.last_train_loss = np.inf
         self.best_val_loss = np.inf
         self.val_map_at_k = []
@@ -35,6 +35,7 @@ class Trainer:
         self.metrics = metrics
         self.start_epoch = start_epoch
         self.current_epoch = start_epoch
+        self.scheduler_resumed = scheduler_resumed
         self.accumulation_steps = accumulation_steps
         self.tensorboard_writer = SummaryWriter(self.tensorboard_logs_dir)
         self.tensorboard_writer.add_hparams
@@ -49,10 +50,6 @@ class Trainer:
             data_keys=["input"]
         ).to("cuda")
 
-        #self.tensorboard_writer.add_graph(self.model)
-        for epoch in range(0, self.start_epoch):
-            scheduler.step()
-            print(f'### SKIPPED EPOCH {epoch+1} ###')
 
     def fit(self):
         """
@@ -64,9 +61,10 @@ class Trainer:
         Siamese network: Siamese loader, siamese model, contrastive loss
         Online triplet learning: batch loader, embedding model, online triplet loss
         """
-        for epoch in range(0, self.start_epoch):
-            self.scheduler.step()
-            print(f'### SKIPPED EPOCH {epoch+1} ###')
+        if not self.scheduler_resumed:
+            for epoch in range(0, self.start_epoch):
+                self.scheduler.step()
+                print(f'### SKIPPED EPOCH {epoch+1} ###')
 
         for epoch in tqdm(range(self.start_epoch, self.n_epochs)):
             self.current_epoch = epoch+1
@@ -95,8 +93,8 @@ class Trainer:
                 if "mAP@k" in metric.name():
                     k = 10
                     self.val_map_at_k.append(metric.value()['mean_average_precision'][k])
-                if metric.name() == "f1":
-                    self.val_micro_f1.append(metric.value())
+                if "F1@k" in metric.name():
+                    self.val_micro_f1.append(metric.value()['f1'][k])
                     
                 print(message)
                 if(dict_metric):
@@ -113,7 +111,12 @@ class Trainer:
                 timestamp = datetime.now().strftime('%Y%m%d')
                 epoch_str = "epoch={:03d}".format(self.current_epoch)
                 torch.save(
-                    self.model.state_dict(),
+                    {
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
+                        "scheduler_state_dict": self.scheduler.state_dict(),
+                        "epoch": self.current_epoch,
+                    },
                     os.path.join(self.checkpoint_dir, f'microf1_{timestamp}_{epoch_str}_{metric_str}.pth'),
                 )
             elif self.val_map_at_k and self.val_map_at_k[-1] == max(self.val_map_at_k):
@@ -125,7 +128,12 @@ class Trainer:
                 timestamp = datetime.now().strftime('%Y%m%d')
                 epoch_str = "epoch={:03d}".format(self.current_epoch)
                 torch.save(
-                    self.model.state_dict(),
+                    {
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
+                        "scheduler_state_dict": self.scheduler.state_dict(),
+                        "epoch": self.current_epoch,
+                    },
                     os.path.join(self.checkpoint_dir, f'microf1_{timestamp}_{epoch_str}_{metric_str}.pth'),
                 )
             

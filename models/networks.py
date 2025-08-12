@@ -19,7 +19,7 @@ class Proximity100x100(nn.Module):
         assert task in ["embedding", "classification"]
         self.task = task
         self.embedding_size = embedding_size
-        self.input_H, self.input_W = 100, 100
+        self.input_H, self.input_W = 270, 270
         self.updated_layer_sizes = False
         self.num_classes = num_classes
 
@@ -40,6 +40,7 @@ class Proximity100x100(nn.Module):
 
         self.potential_fc_layer_sizes = [4096, 2048]
         self.fc_layer_sizes = [self.bound_layer_size(l) for l in self.potential_fc_layer_sizes]
+        #self.embedding_to_classification_sizes = [self.embedding_size, 128, 32, 8]
 
         self.fc = nn.Sequential(
             nn.Linear(self.flattened_size, self.fc_layer_sizes[0], bias=False),
@@ -54,6 +55,16 @@ class Proximity100x100(nn.Module):
         if self.task == "classification":
             if self.num_classes is None:
                 raise ValueError("num_classes must be specified for classification task")
+            
+            # layers = []
+            # for layer_size_in, layer_size_out in zip(self.embedding_to_classification_sizes[:-1], self.embedding_to_classification_sizes[1:]):
+            #     layers.append(nn.Linear(layer_size_in, layer_size_out, bias=True))
+            #     layers.append(nn.ReLU(True))
+            #     layers.append(nn.Dropout(0.5))
+            # layers.append(
+            #     nn.Linear(self.embedding_to_classification_sizes[-1], self.num_classes, bias=True),
+            # )
+            # self.classifier = nn.Sequential(*layers)
             self.classifier = nn.Linear(self.embedding_size, self.num_classes, bias=True)
 
     def _calculate_flattened_size(self, input_shape):
@@ -120,6 +131,40 @@ class Proximity100x100(nn.Module):
         # Normalize embeddings
         return F.normalize(x, p=2, dim=1)
     
+    def get_flattened_features(self, x, use_autocast=False):
+        """Extract hidden features from the model (flattened 3dConvs)"""
+        # x.shape: [self.flattened_size]
+        B, _, _, H, W = x.size()
+        if not self.updated_layer_sizes:
+            self.update_layer_sizes(H, W)
+        
+        if use_autocast:
+            with autocast('cuda', enabled=True):
+                return self._compute_flattened_features(x, B, H, W)
+        else:
+            return self._compute_flattened_features(x, B, H, W)
+    
+    def _compute_flattened_features(self, x, B, H, W):
+        """Internal method to compute flattened 3dConvs"""
+        # Reshape for ResNet processing
+        x = x.view(B * 100, 3, H, W)
+        
+        # Pass through ResNet features
+        x = self.features(x)
+        
+        # Reshape for 3D conv processing
+        channels, feat_h, feat_w = self.features_output_size
+        x = x.view(B, 100, channels, feat_h, feat_w)
+        
+        # Pass through reducing convolutions
+        x = self.reducingconvs(x)
+        
+        # Flatten
+        x = x.view(B, self.flattened_size)
+        
+        # Return flattened x
+        return x
+
     def forward(self, x):
         # x.shape: [B, 300, 1, H, W]
         if self.task == "embedding":

@@ -90,8 +90,8 @@ def load_dataset(volume_dir, seed, train_frac, augmentations_arg):
         paths, labels_tensor, train_size=train_frac, stratify=labels_tensor, random_state=seed
     )
 
-    train_set = ProximityPrerocessedCTTripletDataset(x_train, y_train, train=True, augmentations=augmentations_arg)
-    test_set = ProximityPrerocessedCTTripletDataset(x_test, y_test, train=False, augmentations=False)
+    train_set = ProximityPreprocessedCTDataset(x_train, y_train, train=True, augmentations=augmentations_arg)
+    test_set = ProximityPreprocessedCTDataset(x_test, y_test, train=False, augmentations=False)
     #train_set = ProximityZarrPreprocessedCTTripletDataset(x_train, y_train, train=True, augment=True)
     #test_set = ProximityZarrPreprocessedCTTripletDataset(x_test, y_test, train=False, augment=True)
     return train_set, test_set, determine_negative_compatibles(PROXIMITY_VECTOR_LABELS_FOR_TRAINING)
@@ -124,7 +124,7 @@ def load_dataset_microf1(volume_dir, seed, train_frac, train_eval_frac, augmenta
 
 def create_loaders(train_set, test_set, n_classes, n_samples, cuda):
     """Create optimized data loaders for triplet training with GPU-ready processing"""
-    kwargs = {'num_workers': 2, 'prefetch_factor': 1, 'persistent_workers': True, 'pin_memory': True} if cuda else {}
+    kwargs = {'num_workers': 3, 'prefetch_factor': 1, 'persistent_workers': True, 'pin_memory': True} if cuda else {}
 
     sampler_train = BalancedBatchSampler(
         train_set.labels, PROXIMITY_VECTOR_LABELS_FOR_TRAINING, n_classes, n_samples, multilabel=True
@@ -134,10 +134,11 @@ def create_loaders(train_set, test_set, n_classes, n_samples, cuda):
     )
 
     batch_size = n_classes * n_samples
+    eval_batch_size = 2 * batch_size
 
     return {
-        "train_eval": DataLoader(train_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
-        "test_eval": DataLoader(test_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_size=batch_size, shuffle=False, **kwargs),
+        "train_eval": DataLoader(train_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_size=eval_batch_size, shuffle=False, **kwargs),
+        "test_eval": DataLoader(test_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_size=eval_batch_size, shuffle=False, **kwargs),
         "train_triplet": DataLoader(train_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_sampler=sampler_train, **kwargs),
         "test_triplet": DataLoader(test_set, collate_fn=CollateFn(apply_gpu_aug=False), batch_sampler=sampler_test, **kwargs),
         "all_triplet_train": TripletDataLoader(train_set, n_classes=n_classes, n_samples=n_samples, **kwargs),
